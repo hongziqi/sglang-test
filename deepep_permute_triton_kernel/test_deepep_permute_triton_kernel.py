@@ -3,6 +3,11 @@ import torch_npu
 import triton
 import triton.language as tl
 
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from utils import check_accuracy
+
 @triton.jit
 def deepep_permute_triton_kernel(
     input_ptr,         # input tensor (src_len, hidden_size)
@@ -90,11 +95,11 @@ def save_inputs_outputs(path):
     torch.manual_seed(42)
     src_len, dst_len, hidden_size, topk = 8, 16, 128, 2
     BLOCK_SIZE = 64
-    input = torch.randn(src_len, hidden_size, device="npu", dtype=torch.float16)
-    gateup_input = torch.zeros(dst_len, hidden_size, device="npu", dtype=torch.float16)
+    input = torch.randn(src_len, hidden_size, device="npu", dtype=torch.float32)
+    gateup_input = torch.zeros(dst_len, hidden_size, device="npu", dtype=torch.float32)
     src2dst = torch.randperm(dst_len, device="npu")[:src_len * topk].reshape(src_len, topk)
     topk_ids = torch.randint(0, 10, (src_len, topk), device="npu", dtype=torch.int32)
-    a1_scales = torch.rand(src_len, device="npu", dtype=torch.float16)
+    a1_scales = torch.rand(src_len, device="npu", dtype=torch.float32)
 
     output = deepep_permute_impl(
         input=input,
@@ -114,53 +119,6 @@ def save_inputs_outputs(path):
         "a1_scales": a1_scales.cpu(),
         "output": output.cpu(),
     }, path)
-
-
-def check_accuracy(output: torch.Tensor, expected: torch.Tensor):
-    # 根据 dtype 自动判定阈值
-    dtype = expected.dtype
-    if dtype == torch.float16:
-        print(">>> Compare Type: float16")
-        rtol, atol, max_fail_ratio = 1e-3, 1e-3, 1e-3  # 双千分之一
-    elif dtype == torch.float32:
-        print(">>> Compare Type: float32")
-        rtol, atol, max_fail_ratio = 1e-4, 1e-4, 1e-4  # 双万分之一
-    elif dtype in [torch.int8, torch.uint8]:
-        print(">>> Compare Type: int8 | uint8")
-        rtol, atol, max_fail_ratio = 1e-3, 1, 1e-3     # 容差为1
-    else:
-        raise ValueError(f"Unsupported dtype for accuracy check: {dtype}")
-
-    # 计算误差
-    abs_diff = (output - expected).abs()
-    rel_diff = abs_diff / (expected.abs() + 1e-6)
-    fail_mask = (abs_diff > atol) & (rel_diff > rtol)
-
-    total = output.numel()
-    fail = fail_mask.sum().item()
-    fail_ratio = fail / total
-
-    # 打印最大误差点
-    max_abs = abs_diff.max().item()
-    if max_abs > 0:
-        max_idx_flat = torch.argmax(abs_diff).item()
-        i, j = divmod(max_idx_flat, output.shape[1])
-        print(f"Max diff at [{i}, {j}]: test={output[i, j].item()}, "
-            f"ref={expected[i, j].item()}, "
-            f"abs={abs_diff[i, j].item()}, rel={rel_diff[i, j].item()}")
-
-    # 判断是否精度达标
-    if fail_ratio <= max_fail_ratio:
-        print(f"精度达标 ({fail}/{total}, {fail_ratio:.6%} <= {max_fail_ratio:.6%})")
-    else:
-        print(f"精度不达标 ({fail}/{total}, {fail_ratio:.6%} > {max_fail_ratio:.6%})")
-        idx_list = torch.nonzero(fail_mask)[:10]
-        for i, j in idx_list.tolist():
-            print(f"[{i},{j}]: test={output[i, j].item():.6f}, "
-                  f"ref={expected[i, j].item():.6f}, "
-                  f"diff={abs_diff[i, j].item():.6f}, rel={rel_diff[i, j].item():.6f}")
-
-    return fail_ratio
 
 
 def run_and_compare(path, BLOCK_SIZE: int = 64):

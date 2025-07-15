@@ -87,11 +87,11 @@ def deepep_permute_impl(
 
 def save_inputs_outputs(path: str, src_len: int = 8, dst_len: int = 16, hidden_size: int = 128, topk: int = 2, BLOCK_SIZE: int = 64):
     torch.manual_seed(42)
-    input = torch.randn(src_len, hidden_size, device="cuda", dtype=torch.float16)
-    gateup_input = torch.zeros(dst_len, hidden_size, device="cuda", dtype=torch.float16)
+    input = torch.randn(src_len, hidden_size, device="cuda", dtype=torch.float32)
+    gateup_input = torch.zeros(dst_len, hidden_size, device="cuda", dtype=torch.float32)
     src2dst = torch.randperm(dst_len, device="cuda")[:src_len * topk].reshape(src_len, topk)
     topk_ids = torch.randint(0, 10, (src_len, topk), device="cuda", dtype=torch.int32)
-    a1_scales = torch.rand(src_len, device="cuda", dtype=torch.float16)
+    a1_scales = torch.rand(src_len, device="cuda", dtype=torch.float32)
 
     output = deepep_permute_impl(
         input=input,

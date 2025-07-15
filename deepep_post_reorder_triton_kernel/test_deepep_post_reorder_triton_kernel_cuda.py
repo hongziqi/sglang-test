@@ -96,11 +96,11 @@ def deepep_post_reorder_impl(
 def save_inputs_outputs(path: str, src_len: int = 8, dst_len: int = 16, hidden_size: int = 128, topk: int = 2, BLOCK_SIZE: int = 64):
     torch.manual_seed(42)
 
-    down_output = torch.randn(dst_len, hidden_size, device="cuda", dtype=torch.float16)
-    output = torch.zeros(src_len, hidden_size, device="cuda", dtype=torch.float16)
+    down_output = torch.randn(dst_len, hidden_size, device="cuda", dtype=torch.float32)
+    output = torch.zeros(src_len, hidden_size, device="cuda", dtype=torch.float32)
     src2dst = torch.randint(0, dst_len, (src_len, topk), device="cuda", dtype=torch.int32)
     topk_ids = torch.randint(0, 10, (src_len, topk), device="cuda", dtype=torch.int32)
-    topk_weights = torch.rand(src_len, topk, device="cuda", dtype=torch.float16)
+    topk_weights = torch.rand(src_len, topk, device="cuda", dtype=torch.float32)
 
     # 调用函数
     output = deepep_post_reorder_impl(

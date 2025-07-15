@@ -93,8 +93,8 @@ def gelu_and_mul_triton_launcher(
 
 def save_inputs_outputs(path: str, token_num: int = 8, hidden_size: int = 128,
                         start_expert_id=0, end_expert_id=31, BLOCK_SIZE: int = 64):
-    gateup_output = torch.ones((token_num, hidden_size), device="cuda", dtype=torch.float16)
-    down_input = torch.empty(token_num, hidden_size // 2, device="cuda", dtype=torch.float16)
+    gateup_output = torch.ones((token_num, hidden_size), device="cuda", dtype=torch.float32)
+    down_input = torch.empty(token_num, hidden_size // 2, device="cuda", dtype=torch.float32)
 
     reorder_topk_ids = torch.randint(
         low=start_expert_id,
@@ -104,7 +104,7 @@ def save_inputs_outputs(path: str, token_num: int = 8, hidden_size: int = 128,
         dtype=torch.int32,
     )
 
-    scales = torch.rand(end_expert_id - start_expert_id + 1, device="cuda", dtype=torch.float16)
+    scales = torch.rand(end_expert_id - start_expert_id + 1, device="cuda", dtype=torch.float32)
 
     # 先计算输出
     gelu_and_mul_triton_launcher(
