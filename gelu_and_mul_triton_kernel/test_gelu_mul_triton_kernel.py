@@ -136,10 +136,13 @@ def check_accuracy(output: torch.Tensor, expected: torch.Tensor):
     # 根据 dtype 自动判定阈值
     dtype = expected.dtype
     if dtype == torch.float16:
+        print(">>> Compare Type: float16")
         rtol, atol, max_fail_ratio = 1e-3, 1e-3, 1e-3  # 双千分之一
     elif dtype == torch.float32:
+        print(">>> Compare Type: float32")
         rtol, atol, max_fail_ratio = 1e-4, 1e-4, 1e-4  # 双万分之一
     elif dtype in [torch.int8, torch.uint8]:
+        print(">>> Compare Type: int8 | uint8")
         rtol, atol, max_fail_ratio = 1e-3, 1, 1e-3     # 容差为1
     else:
         raise ValueError(f"Unsupported dtype for accuracy check: {dtype}")
@@ -204,7 +207,11 @@ def run_and_compare(path: str,BLOCK_SIZE: int = 64):
 
 
 if __name__ == "__main__":
-    path = "gelu_mul_cuda_output.pt"
+    # path = "gelu_mul_cuda_output.pt"
+    path = "gelu_mul_float_cuda_output.pt"
     run_and_compare(path)
-    # >>>
+    # >>> Compare Type: float16
     # 精度达标 (0/512, 0.000000% <= 0.100000%)
+    # >>> Compare Type: float32
+    # Max diff at [5, 0]: test=1.2373121976852417, ref=1.2373123168945312, abs=1.1920928955078125e-07, rel=9.634527486923616e-08
+    # 精度达标 (0/512, 0.000000% <= 0.010000%)

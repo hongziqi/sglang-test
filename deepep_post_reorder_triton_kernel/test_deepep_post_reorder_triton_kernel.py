@@ -127,10 +127,13 @@ def check_accuracy(output: torch.Tensor, expected: torch.Tensor):
     # 根据 dtype 自动判定阈值
     dtype = expected.dtype
     if dtype == torch.float16:
+        print(">>> Compare Type: float16")
         rtol, atol, max_fail_ratio = 1e-3, 1e-3, 1e-3  # 双千分之一
     elif dtype == torch.float32:
+        print(">>> Compare Type: float32")
         rtol, atol, max_fail_ratio = 1e-4, 1e-4, 1e-4  # 双万分之一
     elif dtype in [torch.int8, torch.uint8]:
+        print(">>> Compare Type: int8 | uint8")
         rtol, atol, max_fail_ratio = 1e-3, 1, 1e-3     # 容差为1
     else:
         raise ValueError(f"Unsupported dtype for accuracy check: {dtype}")
@@ -190,8 +193,11 @@ def run_and_compare(path, BLOCK_SIZE: int = 64):
     
 
 if __name__ == "__main__":
-    path = "deepep_post_reorder_cuda_output.pt"
+    path = "deepep_post_reorder_float_cuda_output.pt"
     run_and_compare(path)       # 对比cuda和triton-ascend的输出
-    # >>>
+    # >>> Compare Type: float16
     # Max diff at [2, 51]: test=-2.0, ref=-2.001953125, abs=0.001953125, rel=0.0009756088256835938
     # 精度达标 (0/1024, 0.000000% <= 0.100000%)
+    # >>> Compare Type: float32
+    # Max diff at [3, 90]: test=2.2100167274475098, ref=2.2100164890289307, abs=2.384185791015625e-07, rel=1.0788085802460046e-07
+    # 精度达标 (0/1024, 0.000000% <= 0.010000%)
