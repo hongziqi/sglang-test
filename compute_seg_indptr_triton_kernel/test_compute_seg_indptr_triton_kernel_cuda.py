@@ -33,6 +33,8 @@ def test_compute_seg_indptr_triton():
     compute_seg_indptr_triton_kernel[grid](reorder_topk_ids, seg_indptr, num_toks)
 
     seg_indptr_cpu = seg_indptr.cpu().numpy()
+    print("reorder_topk_ids:", reorder_topk_ids.cpu().numpy())
+    print("num_toks:", num_toks)
     print("Computed seg_indptr:", seg_indptr_cpu)
 
     expected = [0,2,5,7]
@@ -59,13 +61,14 @@ def compute_seg_indptr_impl(
 
 def save_inputs_outputs(path: str, num_toks: int = 8, num_experts: int = 3):
     # 初始化输入张量
-    reorder_topk_ids = torch.arange(num_toks, dtype=torch.int32, device="cuda")
+    reorder_topk_ids = torch.zeros(num_toks, dtype=torch.int32, device="cuda")
     seg_indptr = torch.zeros(num_experts + 1, dtype=torch.int32, device="cuda")
 
-    # 构造 reorder_topk_ids，模拟每个 token 的 expert id
+    # 构造排序的 reorder_topk_ids，模拟每个 token 的 expert id
     for i in range(num_experts):
         start_idx = i * (num_toks // num_experts)
-        end_idx = (i + 1) * (num_toks // num_experts)
+        # 最后一个 expert 的 end_idx 应该是 num_toks
+        end_idx = (i + 1) * (num_toks // num_experts) if i < num_experts - 1 else num_toks
         reorder_topk_ids[start_idx:end_idx] = i
 
     compute_seg_indptr_impl(
@@ -73,7 +76,7 @@ def save_inputs_outputs(path: str, num_toks: int = 8, num_experts: int = 3):
         seg_indptr=seg_indptr,
         num_toks=num_toks,
     )
-
+    print("reorder_topk_ids:", reorder_topk_ids.cpu().numpy())
     print("Computed seg_indptr:", seg_indptr.cpu().numpy())
 
     # 保存输入输出
@@ -108,11 +111,12 @@ def run_and_compare(path, atol: float = 1, rtol: float = 1e-3):
 
 if __name__ == "__main__":
     path = "compute_seg_indptr_cuda_output.pt"
-    save_inputs_outputs(path, 4096, 15)
+    save_inputs_outputs(path, 4096, 16)
 
     # 运行并比较结果
     run_and_compare(path)
-    # Computed seg_indptr: [   0  273  546  819 1092 1365 1638 1911 2184 2457 2730 3003 3276 3549
-    # 3822 4095]
+    # reorder_topk_ids: [ 0  0  0 ... 15 15 15]
+    # Computed seg_indptr: [   0  256  512  768 1024 1280 1536 1792 2048 2304 2560 2816 3072 3328
+    # 3584 3840 4096]
     # Output consistent: True
     # Max difference: 0
