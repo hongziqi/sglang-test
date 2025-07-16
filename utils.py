@@ -3,6 +3,8 @@ import torch_npu
 
 
 def check_accuracy(output: torch.Tensor, expected: torch.Tensor):
+    assert output.shape == expected.shape, f"Shape mismatch: {output.shape} vs {expected.shape}"
+    
     # 根据 dtype 自动判定阈值
     dtype = expected.dtype
     if dtype == torch.float16:
@@ -13,10 +15,10 @@ def check_accuracy(output: torch.Tensor, expected: torch.Tensor):
         rtol, atol, max_fail_ratio = 1e-4, 1e-4, 1e-4  # 双万分之一
     elif dtype == torch.int32:
         print(">>> Compare Type: int32")
-        rtol, atol, max_fail_ratio = 1e-3, 1, 1e-3  # 容差为1
+        rtol, atol, max_fail_ratio = 1e-3, 0.5, 1e-3
     elif dtype in [torch.int8, torch.uint8]:
         print(">>> Compare Type: int8 | uint8")
-        rtol, atol, max_fail_ratio = 1e-3, 1, 1e-3     # 容差为1
+        rtol, atol, max_fail_ratio = 1e-3, 0.5, 1e-3
     else:
         raise ValueError(f"Unsupported dtype for accuracy check: {dtype}")
 
@@ -32,21 +34,22 @@ def check_accuracy(output: torch.Tensor, expected: torch.Tensor):
     # 打印最大误差点
     max_abs = abs_diff.max().item()
     if max_abs > 0:
-        max_idx_flat = torch.argmax(abs_diff).item()
-        i, j = divmod(max_idx_flat, output.shape[1])
-        print(f"Max diff at [{i}, {j}]: test={output[i, j].item()}, "
-            f"ref={expected[i, j].item()}, "
-            f"abs={abs_diff[i, j].item()}, rel={rel_diff[i, j].item()}")
+        max_idx_flat = torch.argmax(abs_diff)  # 不使用 .item()
+        max_idx = torch.unravel_index(max_idx_flat, output.shape)  # 适配多维张量
+        print(f"Max diff at {max_idx}: test={output[max_idx].item()}, "
+              f"ref={expected[max_idx].item()}, "
+              f"abs={abs_diff[max_idx].item()}, rel={rel_diff[max_idx].item()}")
 
     # 判断是否精度达标
     if fail_ratio <= max_fail_ratio:
         print(f"精度达标 ({fail}/{total}, {fail_ratio:.6%} <= {max_fail_ratio:.6%})")
     else:
         print(f"精度不达标 ({fail}/{total}, {fail_ratio:.6%} > {max_fail_ratio:.6%})")
-        idx_list = torch.nonzero(fail_mask)[:10]
-        for i, j in idx_list.tolist():
-            print(f"[{i},{j}]: test={output[i, j].item():.6f}, "
-                  f"ref={expected[i, j].item():.6f}, "
-                  f"diff={abs_diff[i, j].item():.6f}, rel={rel_diff[i, j].item():.6f}")
+        idx_list = torch.nonzero(fail_mask)[:10]  # 获取前10个失败点
+        for idx in idx_list.tolist():
+            idx_tuple = tuple(idx)  # 转换为多维索引
+            print(f"{idx_tuple}: test={output[idx_tuple].item():.6f}, "
+                  f"ref={expected[idx_tuple].item():.6f}, "
+                  f"diff={abs_diff[idx_tuple].item():.6f}, rel={rel_diff[idx_tuple].item():.6f}")
 
     return fail_ratio
