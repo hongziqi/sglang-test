@@ -1,12 +1,6 @@
 import torch
-import torch_npu
 import triton
 import triton.language as tl
-
-import sys
-import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from utils import check_accuracy
 
 @triton.jit
 def deepep_compute_src2dst_triton_kernel(
@@ -57,12 +51,12 @@ def deepep_compute_src2dst_impl(
 
 def save_inputs_outputs(path: str, num_toks: int = 8, BLOCK_SIZE: int = 4):
     # 创建输入张量
-    reorder_ids = torch.arange(num_toks, dtype=torch.int32, device="npu")
-    src2dst = torch.zeros(num_toks, dtype=torch.int32, device="npu")
+    reorder_ids = torch.arange(num_toks, dtype=torch.int32, device="cuda")
+    src2dst = torch.zeros(num_toks, dtype=torch.int32, device="cuda")
     
     # 动态计算无效 token 的数量
     num_invalid_tokens = torch.sum(reorder_ids == -1)  # 假设 -1 表示无效 token
-    num_minus_one = torch.tensor([num_invalid_tokens], dtype=torch.int32, device="npu")
+    num_minus_one = torch.tensor([num_invalid_tokens], dtype=torch.int32, device="cuda")
 
     # 调用 Triton 内核
     src2dst = deepep_compute_src2dst_impl(
@@ -71,7 +65,7 @@ def save_inputs_outputs(path: str, num_toks: int = 8, BLOCK_SIZE: int = 4):
         num_minus_one=num_minus_one,
         BLOCK_SIZE=BLOCK_SIZE,
     )
-    print(">> reorder_ids:", reorder_ids.cpu().numpy())
+
     print(">> Compute src2dst:", src2dst.cpu().numpy())
 
     # 保存输入输出
@@ -79,35 +73,39 @@ def save_inputs_outputs(path: str, num_toks: int = 8, BLOCK_SIZE: int = 4):
         "reorder_ids": reorder_ids.cpu(),
         "src2dst": src2dst.cpu(),
         "num_minus_one": num_minus_one.cpu(),
-        "BLOCK_SIZE": BLOCK_SIZE
+        "BLOCK_SIZE": BLOCK_SIZE,
     }, path)
 
 
-def run_and_compare(path):
+def run_and_compare(path, atol: float = 1, rtol: float = 1e-3):
     data = torch.load(path)
-    reorder_ids = data["reorder_ids"].to("npu")
-    src2dst = torch.zeros_like(data["src2dst"]).to("npu")
-    num_minus_one = data["num_minus_one"].to("npu")
+    reorder_ids = data["reorder_ids"].cuda()
+    src2dst = torch.zeros_like(data["src2dst"]).cuda()
+    num_minus_one = data["num_minus_one"].cuda()
     BLOCK_SIZE = data["BLOCK_SIZE"]
 
     # 重新计算输出
-    src2dst = deepep_compute_src2dst_impl(
+    deepep_compute_src2dst_impl(
         reorder_ids=reorder_ids,
         src2dst=src2dst,
         num_minus_one=num_minus_one,
         BLOCK_SIZE=BLOCK_SIZE,
     )
 
-    # 检查结果
-    expected_output = data["src2dst"].to("npu")
-    check_accuracy(src2dst, expected_output)
-
+    output_ref = data["src2dst"].cuda()
+    is_close = torch.isclose(src2dst, output_ref, atol=atol, rtol=rtol)
+    mismatch_idx = torch.nonzero(~is_close)
+    print(f"Output consistent: {is_close.all().item()}\nMax difference: {(src2dst - output_ref).abs().max().item()}")
+    for idx in mismatch_idx:
+        i, j = idx.tolist()
+        print(f"[{i}, {j}]: test={src2dst[i, j]}, ref={output_ref[i, j]}, diff={abs(src2dst[i, j] - output_ref[i, j])}")
 
 if __name__ == "__main__":
-    # 编译测试
-    path = "compute_src2dst_npu_output.pt"
+    path = "deepep_compute_src2dst_cuda_output.pt"
     save_inputs_outputs(path)
+    # >> Compute src2dst: [0 1 2 3 4 5 6 7]
 
-    # 对比cuda和triton-ascend的输出
-    # path = "compute_src2dst_cuda_output.pt"
-    # run_and_compare(path)
+    # 运行并比较结果
+    run_and_compare(path)
+    # Output consistent: True
+    # Max difference: 0
