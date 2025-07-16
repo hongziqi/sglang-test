@@ -9,3 +9,5 @@
 __pycache__
 
 extra-info/
+
+*_npu_output.pt
