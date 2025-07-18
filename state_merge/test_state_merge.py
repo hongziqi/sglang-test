@@ -58,6 +58,8 @@ def state_merge_kernel(
     d = 1.0
     other_d = 1.0
 
+    # 将两个Attention的中间向量v_a和v_b，以及他们对应的缩放标量s_a和s_b 合并为归一化的向量v_merged、标量s_merged
+    # 并计算出用于归一化的标量d_merged
     v_merged, s_merged, d_merged = state_merge(v_a, s_a, d, v_b, s_b, other_d)
 
     # 保存结果
