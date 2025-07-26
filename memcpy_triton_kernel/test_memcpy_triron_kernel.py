@@ -111,6 +111,9 @@ def run_and_compare(path):
     chunk_size = data["chunk_size"]
     BLOCK_SIZE = data["BLOCK_SIZE"]
 
+    print("src_tensor: shape={}, dtype={}, device={}".format(
+        src_tensor.shape, src_tensor.dtype, src_tensor.device))
+
     # 重新计算输出
     memcpy_triton_kernel_impl(
         dst_tensor=dst_tensor,
@@ -122,6 +125,74 @@ def run_and_compare(path):
         BLOCK_SIZE=BLOCK_SIZE,
     )
     expected_output = data["dst_tensor"].npu()
+
+    check_accuracy(dst_tensor, expected_output)
+
+
+def run_and_compare_real_data(path):
+    """
+    [MEMCPY TRITON KERNEL REAL DATA]
+    dst:
+    Shape: torch.Size([4, 2048])
+    Dtype: torch.bfloat16
+    Device: cpu
+    First 5 elements: [0.0, 0.0, 0.0, 0.0, 0.0]
+    src:
+    Shape: torch.Size([4, 2048])
+    Dtype: torch.bfloat16
+    Device: cpu
+    First 5 elements: [0.0045166015625, -0.00823974609375, 0.0179443359375, 0.01300048828125, 3.0517578125e-05]
+    offset:
+    Shape: torch.Size([])
+    Dtype: torch.int64
+    Device: cpu
+    First 5 elements: [0]
+    sz:
+    Shape: torch.Size([])
+    Dtype: torch.int32
+    Device: cpu
+    First 5 elements: [2]
+    offset_src: False
+    chunk_size: 2048
+    BLOCK_SIZE: 8192
+    """
+    try:
+        data = torch.load(path, map_location=torch.device('cpu'))
+    except FileNotFoundError:
+        print(f"File {path} not found. Please run the test to generate it.")
+        return
+    print("\n[MEMCPY TRITON KERNEL REAL DATA]")
+
+    for key, value in data.items():
+        if isinstance(value, torch.Tensor):
+            print(f"{key}:")
+            print(f"  Shape: {value.cpu().shape}")
+            print(f"  Dtype: {value.cpu().dtype}")
+            print(f"  Device: {value.cpu().device}")
+            # 打印前5个元素
+            print(f"  First 5 elements: {value.cpu().flatten()[:5].tolist()}")
+        else:
+            print(f"{key}: {value}")
+    
+    src_tensor = data["src"].npu()
+    dst_tensor = torch.zeros_like(src_tensor, dtype=torch.bfloat16, device="npu")
+    offset_tensor = data["offset"].npu()
+    size_tensor = data["sz"].npu()
+    offset_src = data["offset_src"]
+    chunk_size = data["chunk_size"]
+    BLOCK_SIZE = data["BLOCK_SIZE"]
+
+    # 重新计算输出
+    memcpy_triton_kernel_impl(
+        dst_tensor=dst_tensor,
+        src_tensor=src_tensor,
+        offset_tensor=offset_tensor,
+        sz_tensor=size_tensor,
+        offset_src=offset_src,  # 是否对源数据应用偏移
+        chunk_size=chunk_size,
+        BLOCK_SIZE=BLOCK_SIZE,
+    )
+    expected_output = data["dst"].npu()
 
     check_accuracy(dst_tensor, expected_output)
 
@@ -160,18 +231,34 @@ def run_memcpy_kernel():
 
 
 if __name__ == "__main__":
-    # 编译测试
-    path = "memcpy_npu_output.pt"
-    save_inputs_outputs(path)
+    # 1. 编译测试
+    # path = "memcpy_npu_output.pt"
+    # save_inputs_outputs(path)
     # Source Tensor:
     # [0.000e+00 1.000e+00 2.000e+00 ... 1.021e+03 1.022e+03 1.023e+03]
 
     # Destination Tensor (after memcpy):
     # [0.000e+00 1.000e+00 2.000e+00 ... 1.021e+03 1.022e+03 1.023e+03]
 
-    # 对比cuda和triton-ascend的输出
-    path = "memcpy_cuda_output.pt"
-    run_and_compare(path)
+    # 2. 对比cuda和triton-ascend的输出
+    # path = "memcpy_cuda_output.pt"
+    # run_and_compare(path)
     # >>> Compare Type: float32
     # 精度达标 (0/1024, 0.000000% <= 0.010000%)
 
+    # 3. 对比真实数据
+    path = "11_memcpy_triton_kernel_debug_cuda0.pt"
+    run_and_compare_real_data(path)
+    # >>> Compare Type: bfloat16
+    # Max diff at (tensor(0, device='npu:0'), tensor(1992, device='npu:0')): test=-0.5703125, ref=0.0, abs=0.5703125, rel=569344.0
+    # 精度不达标 (2946/8192, 35.961914% > 0.500000%)
+    # (0, 1): test=-0.008240, ref=0.000000, diff=0.008240, rel=8256.000000
+    # (0, 2): test=0.017944, ref=0.000000, diff=0.017944, rel=17920.000000
+    # (0, 3): test=0.013000, ref=0.000000, diff=0.013000, rel=12992.000000
+    # (0, 6): test=-0.014832, ref=0.000000, diff=0.014832, rel=14848.000000
+    # (0, 7): test=-0.014526, ref=0.000000, diff=0.014526, rel=14528.000000
+    # (0, 9): test=0.010498, ref=0.000000, diff=0.010498, rel=10496.000000
+    # (0, 10): test=-0.011414, ref=0.000000, diff=0.011414, rel=11456.000000
+    # (0, 15): test=-0.010986, ref=0.000000, diff=0.010986, rel=11008.000000
+    # (0, 16): test=0.021851, ref=0.000000, diff=0.021851, rel=21888.000000
+    # (0, 17): test=-0.018555, ref=0.000000, diff=0.018555, rel=18560.000000

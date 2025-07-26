@@ -10,6 +10,9 @@ def check_accuracy(output: torch.Tensor, expected: torch.Tensor):
     if dtype == torch.float16:
         print(">>> Compare Type: float16")
         rtol, atol, max_fail_ratio = 1e-3, 1e-3, 1e-3  # 双千分之一
+    elif dtype == torch.bfloat16:
+        print(">>> Compare Type: bfloat16")
+        rtol, atol, max_fail_ratio = 5e-3, 5e-3, 5e-3  # 双千分之五
     elif dtype == torch.float32:
         print(">>> Compare Type: float32")
         rtol, atol, max_fail_ratio = 1e-4, 1e-4, 1e-4  # 双万分之一
