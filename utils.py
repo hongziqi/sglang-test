@@ -1,5 +1,4 @@
 import torch
-import torch_npu
 
 
 def check_accuracy(output: torch.Tensor, expected: torch.Tensor):
@@ -16,12 +15,9 @@ def check_accuracy(output: torch.Tensor, expected: torch.Tensor):
     elif dtype == torch.float32:
         print(">>> Compare Type: float32")
         rtol, atol, max_fail_ratio = 1e-4, 1e-4, 1e-4  # 双万分之一
-    elif dtype == torch.int32:
-        print(">>> Compare Type: int32")
-        rtol, atol, max_fail_ratio = 1e-3, 0.5, 1e-3
-    elif dtype in [torch.int8, torch.uint8]:
-        print(">>> Compare Type: int8 | uint8")
-        rtol, atol, max_fail_ratio = 1e-3, 0.5, 1e-3
+    elif dtype in [torch.int8, torch.uint8, torch.int32, torch.uint32, torch.int64, torch.uint64]:
+        print(">>> Compare Type: int")
+        rtol, atol, max_fail_ratio = 0, 0, 0  # 整数类型不允许误差
     else:
         raise ValueError(f"Unsupported dtype for accuracy check: {dtype}")
 

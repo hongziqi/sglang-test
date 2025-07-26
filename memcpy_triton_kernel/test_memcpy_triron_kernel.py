@@ -129,7 +129,7 @@ def run_and_compare(path):
     check_accuracy(dst_tensor, expected_output)
 
 
-def run_and_compare_real_data(path):
+def run_and_compare_real_data(src_path, expected_path):
     """
     [MEMCPY TRITON KERNEL REAL DATA]
     dst:
@@ -157,9 +157,10 @@ def run_and_compare_real_data(path):
     BLOCK_SIZE: 8192
     """
     try:
-        data = torch.load(path, map_location=torch.device('cpu'))
+        data = torch.load(src_path, map_location=torch.device('cpu'))
+        expected_data = torch.load(expected_path, map_location=torch.device('cpu'))
     except FileNotFoundError:
-        print(f"File {path} not found. Please run the test to generate it.")
+        print(f"File {src_path} or {expected_path} not found. Please run the test to generate it.")
         return
     print("\n[MEMCPY TRITON KERNEL REAL DATA]")
 
@@ -175,7 +176,7 @@ def run_and_compare_real_data(path):
             print(f"{key}: {value}")
     
     src_tensor = data["src"].npu()
-    dst_tensor = torch.zeros_like(src_tensor, dtype=torch.bfloat16, device="npu")
+    dst_tensor = data["dst"].npu()
     offset_tensor = data["offset"].npu()
     size_tensor = data["sz"].npu()
     offset_src = data["offset_src"]
@@ -192,16 +193,9 @@ def run_and_compare_real_data(path):
         chunk_size=chunk_size,
         BLOCK_SIZE=BLOCK_SIZE,
     )
-    expected_output = data["dst"].npu()
+    expected_output = expected_data["dst"].npu()
 
     check_accuracy(dst_tensor, expected_output)
-
-    print("-------- DEBUG INFO --------")
-    print("Test Dst Tensor(first 100 elements):")
-    print(dst_tensor.flatten()[:100].tolist())
-    print("Expected Output Tensor(first 100 elements):")
-    print(expected_output.flatten()[:100].tolist())
-    print("-------- DEBUG INFO --------")
 
 
 # fffrog testcases
@@ -254,18 +248,6 @@ if __name__ == "__main__":
     # 精度达标 (0/1024, 0.000000% <= 0.010000%)
 
     # 3. 对比真实数据
-    path = "11_memcpy_triton_kernel_debug_cuda0.pt"
-    run_and_compare_real_data(path)
-    # >>> Compare Type: bfloat16
-    # Max diff at (tensor(0, device='npu:0'), tensor(1992, device='npu:0')): test=-0.5703125, ref=0.0, abs=0.5703125, rel=569344.0
-    # 精度不达标 (2946/8192, 35.961914% > 0.500000%)
-    # (0, 1): test=-0.008240, ref=0.000000, diff=0.008240, rel=8256.000000
-    # (0, 2): test=0.017944, ref=0.000000, diff=0.017944, rel=17920.000000
-    # (0, 3): test=0.013000, ref=0.000000, diff=0.013000, rel=12992.000000
-    # (0, 6): test=-0.014832, ref=0.000000, diff=0.014832, rel=14848.000000
-    # (0, 7): test=-0.014526, ref=0.000000, diff=0.014526, rel=14528.000000
-    # (0, 9): test=0.010498, ref=0.000000, diff=0.010498, rel=10496.000000
-    # (0, 10): test=-0.011414, ref=0.000000, diff=0.011414, rel=11456.000000
-    # (0, 15): test=-0.010986, ref=0.000000, diff=0.010986, rel=11008.000000
-    # (0, 16): test=0.021851, ref=0.000000, diff=0.021851, rel=21888.000000
-    # (0, 17): test=-0.018555, ref=0.000000, diff=0.018555, rel=18560.000000
+    src_path = "11_memcpy_triton_kernel_debug_cuda0.pt"
+    expected_path = "11_memcpy_triton_kernel_expected_cuda0.pt"
+    run_and_compare_real_data(src_path, expected_path)

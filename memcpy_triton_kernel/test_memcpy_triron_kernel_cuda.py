@@ -3,6 +3,12 @@ import triton
 import triton.language as tl
 
 
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from utils import check_accuracy
+
+
 # 定义 memcpy_triton_kernel
 @triton.jit
 def memcpy_triton_kernel(
@@ -126,6 +132,82 @@ def run_and_compare(path, atol: float = 1e-3, rtol: float = 1e-3):
         print(f"[{i}, {j}]: test={dst_tensor[i, j]}, ref={output_ref[i, j]}, diff={abs(dst_tensor[i, j] - output_ref[i, j])}")
 
 
+def run_and_compare_real_data(src_path, expected_path):
+    """
+    [MEMCPY TRITON KERNEL REAL DATA]
+    dst:
+    Shape: torch.Size([4, 2048])
+    Dtype: torch.bfloat16
+    Device: cpu
+    First 5 elements: [0.0, 0.0, 0.0, 0.0, 0.0]
+    src:
+    Shape: torch.Size([4, 2048])
+    Dtype: torch.bfloat16
+    Device: cpu
+    First 5 elements: [0.0045166015625, -0.00823974609375, 0.0179443359375, 0.01300048828125, 3.0517578125e-05]
+    offset:
+    Shape: torch.Size([])
+    Dtype: torch.int64
+    Device: cpu
+    First 5 elements: [0]
+    sz:
+    Shape: torch.Size([])
+    Dtype: torch.int32
+    Device: cpu
+    First 5 elements: [2]
+    offset_src: False
+    chunk_size: 2048
+    BLOCK_SIZE: 8192
+    """
+    try:
+        data = torch.load(src_path)
+    except FileNotFoundError:
+        print(f"File {src_path} not found. Please run the test to generate it.")
+        return
+    print("\n[MEMCPY TRITON KERNEL REAL DATA]")
+
+    for key, value in data.items():
+        if isinstance(value, torch.Tensor):
+            print(f"{key}:")
+            print(f"  Shape: {value.cpu().shape}")
+            print(f"  Dtype: {value.cpu().dtype}")
+            print(f"  Device: {value.cpu().device}")
+            # 打印前5个元素
+            print(f"  First 10 elements: {value.cpu().flatten()[:10].tolist()}")
+        else:
+            print(f"{key}: {value}")
+    
+    src_tensor = data["src"].cuda()
+    dst_tensor = data["dst"].cuda()
+    offset_tensor = data["offset"].cuda()
+    size_tensor = data["sz"].cuda()
+    offset_src = data["offset_src"]
+    chunk_size = data["chunk_size"]
+    BLOCK_SIZE = data["BLOCK_SIZE"]
+
+    # 重新计算输出
+    memcpy_triton_kernel_impl(
+        dst_tensor=dst_tensor,
+        src_tensor=src_tensor,
+        offset_tensor=offset_tensor,
+        sz_tensor=size_tensor,
+        offset_src=offset_src,  # 是否对源数据应用偏移
+        chunk_size=chunk_size,
+        BLOCK_SIZE=BLOCK_SIZE,
+    )
+
+    # 存储新的路径
+    torch.save({
+        "src": src_tensor.cpu(),
+        "dst": dst_tensor.cpu(),
+        "offset": offset_tensor.cpu(),
+        "sz": size_tensor.cpu(),
+        "offset_src": offset_src,
+        "chunk_size": chunk_size,
+        "BLOCK_SIZE": BLOCK_SIZE,
+    }, expected_path)
+
+
 # fffrog testcases
 def run_memcpy_kernel():
     # 定义输入和输出张量
@@ -160,11 +242,10 @@ def run_memcpy_kernel():
 
 
 if __name__ == "__main__":
-    path = "memcpy_cuda_output.pt"
-    save_inputs_outputs(path, num_tokens=1024, offset=1, size=1023, chunk_size=1, BLOCK_SIZE=256)
-
-    # 运行并比较结果
-    run_and_compare(path)
+    # 1. 运行并比较结果
+    # path = "memcpy_cuda_output.pt"
+    # save_inputs_outputs(path, num_tokens=1024, offset=1, size=1023, chunk_size=1, BLOCK_SIZE=256)
+    # run_and_compare(path)
     # Source Tensor:
     # [0.000e+00 1.000e+00 2.000e+00 ... 1.021e+03 1.022e+03 1.023e+03]
 
@@ -172,3 +253,8 @@ if __name__ == "__main__":
     # [0.000e+00 0.000e+00 1.000e+00 ... 1.020e+03 1.021e+03 1.022e+03]
     # Output consistent: True
     # Max difference: 0.0
+
+    # 2. 运行真实数据, 并保存运行结果
+    src_path = "11_memcpy_triton_kernel_debug_cuda0.pt"
+    expected_path = "11_memcpy_triton_kernel_expected_cuda0.pt"
+    run_and_compare_real_data(src_path, expected_path)
