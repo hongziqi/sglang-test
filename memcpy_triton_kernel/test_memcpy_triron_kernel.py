@@ -170,7 +170,7 @@ def run_and_compare_real_data(path):
             print(f"  Dtype: {value.cpu().dtype}")
             print(f"  Device: {value.cpu().device}")
             # 打印前5个元素
-            print(f"  First 5 elements: {value.cpu().flatten()[:5].tolist()}")
+            print(f"  First 10 elements: {value.cpu().flatten()[:10].tolist()}")
         else:
             print(f"{key}: {value}")
     
@@ -195,6 +195,13 @@ def run_and_compare_real_data(path):
     expected_output = data["dst"].npu()
 
     check_accuracy(dst_tensor, expected_output)
+
+    print("-------- DEBUG INFO --------")
+    print("Test Dst Tensor(first 100 elements):")
+    print(dst_tensor.flatten()[:100].tolist())
+    print("Expected Output Tensor(first 100 elements):")
+    print(expected_output.flatten()[:100].tolist())
+    print("-------- DEBUG INFO --------")
 
 
 # fffrog testcases
