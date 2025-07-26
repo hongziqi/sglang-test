@@ -2,6 +2,11 @@ import torch
 import triton
 import triton.language as tl
 
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from utils import check_accuracy
+
 @triton.jit
 def compute_seg_indptr_triton_kernel(reorder_topk_ids, seg_indptr, num_toks):
     expert = tl.program_id(0)
@@ -109,14 +114,71 @@ def run_and_compare(path, atol: float = 1, rtol: float = 1e-3):
         print(f"[{i}, {j}]: test={seg_indptr[i, j]}, ref={output_ref[i, j]}, diff={abs(seg_indptr[i, j] - output_ref[i, j])}")
 
 
-if __name__ == "__main__":
-    path = "compute_seg_indptr_cuda_output.pt"
-    save_inputs_outputs(path, 4096, 16)
+def run_and_compare_real_data(src_path, expected_path):
+    """
+    [SEG INDPTR KERNEL REAL DATA]
+    >>reorder_topk_ids:
+    Shape: torch.Size([1280])
+    Dtype: torch.int64
+    Device: cpu
+    First 10 elements: [45, 45, 45, 45, 45, 45, 45, 45, 45, 45]
+    >>seg_indptr:
+    Shape: torch.Size([129])
+    Dtype: torch.int64
+    Device: cpu
+    First 10 elements: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    >>numel: 1280
+    >>num_experts: 128
+    """
+    try:
+        data = torch.load(src_path, map_location=torch.device('cpu'))
+    except FileNotFoundError:
+        print(f"File {src_path} not found. Please run the test to generate it.")
+        return
+    print("\n[SEG INDPTR KERNEL REAL DATA]")
+    for key, value in data.items():
+        if isinstance(value, torch.Tensor):
+            print(f">>{key}:")
+            print(f"  Shape: {value.cpu().shape}")
+            print(f"  Dtype: {value.cpu().dtype}")
+            print(f"  Device: {value.cpu().device}")
+            # 打印前10个元素
+            print(f"  First 10 elements: {value.cpu().flatten()[:10].tolist()}")
+        else:
+            print(f">>{key}: {value}")
+    
+    reorder_topk_ids = data["reorder_topk_ids"].cuda()
+    seg_indptr = data["seg_indptr"].cuda()
+    numel = data["numel"]
+    num_experts = data["num_experts"]
 
-    # 运行并比较结果
-    run_and_compare(path)
+    # 重新计算输出
+    compute_seg_indptr_impl(
+        reorder_topk_ids=reorder_topk_ids,
+        seg_indptr=seg_indptr,
+        num_toks=numel,
+    )
+
+    torch.save({
+        "reorder_topk_ids": reorder_topk_ids.cpu(),
+        "seg_indptr": seg_indptr.cpu(),
+        "numel": numel,
+        "num_experts": num_experts,
+    }, expected_path)
+
+
+if __name__ == "__main__":
+    # 1. 运行并比较结果
+    # path = "compute_seg_indptr_cuda_output.pt"
+    # save_inputs_outputs(path, 4096, 16)
+    # run_and_compare(path)
     # reorder_topk_ids: [ 0  0  0 ... 15 15 15]
     # Computed seg_indptr: [   0  256  512  768 1024 1280 1536 1792 2048 2304 2560 2816 3072 3328
     # 3584 3840 4096]
     # Output consistent: True
     # Max difference: 0
+
+    # 2. 运行真实数据, 并保存运行结果
+    src_path = "seg_indptr_kernel_debug_cuda0.pt"
+    expected_path = "seg_indptr_kernel_expected_cuda0.pt"
+    run_and_compare_real_data(src_path, expected_path)

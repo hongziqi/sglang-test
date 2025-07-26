@@ -106,16 +106,72 @@ def run_and_compare(path):
     check_accuracy(seg_indptr, expected_output)
 
 
-if __name__ == "__main__":
-    import numpy as np
+def run_and_compare_real_data(src_path, expected_path):
+    """
+    [SEG INDPTR KERNEL REAL DATA]
+    >>reorder_topk_ids:
+    Shape: torch.Size([1280])
+    Dtype: torch.int64
+    Device: cpu
+    First 10 elements: [45, 45, 45, 45, 45, 45, 45, 45, 45, 45]
+    >>seg_indptr:
+    Shape: torch.Size([129])
+    Dtype: torch.int64
+    Device: cpu
+    First 10 elements: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    >>numel: 1280
+    >>num_experts: 128
+    """
+    try:
+        data = torch.load(src_path, map_location=torch.device('cpu'))
+        expected_data = torch.load(expected_path, map_location=torch.device('cpu'))
+    except Exception as e:
+        print(f"Error loading data from {src_path}: {e}")
+        return
 
-    # 编译测试
+    for key, value in data.items():
+        if isinstance(value, torch.Tensor):
+            print(f">>{key}:")
+            print(f" Shape: {value.shape}")
+            print(f" Dtype: {value.dtype}")
+            print(f" Device: {value.device}")
+            # 打印前10个元素
+            print(f" First 10 elements: {value.flatten()[:10].tolist()}")
+        elif isinstance(value, int):
+            print(f">>{key}: {value}")
+        else:
+            print(f">>{key}: {value}")
+    
+    reorder_topk_ids = data["reorder_topk_ids"].npu()
+    seg_indptr = data["seg_indptr"].npu()
+    numel = data["numel"]
+    num_experts = data["num_experts"]
+    # 重新计算输出
+    compute_seg_indptr_impl(
+        reorder_topk_ids=reorder_topk_ids,
+        seg_indptr=seg_indptr,
+        num_toks=numel,
+    )
+    expected_output = expected_data["seg_indptr"].npu()
+
+    check_accuracy(seg_indptr, expected_output)
+
+
+if __name__ == "__main__":
+    # 1.编译测试
     # path = "compute_seg_indptr_npu_output.pt"
     # save_inputs_outputs(path)
     # Computed seg_indptr: [0 2 4 8]
 
-    # 对比cuda和triton-ascend的输出
-    path = "compute_seg_indptr_cuda_output.pt"
-    run_and_compare(path)
+    # 2.对比cuda和triton-ascend的输出
+    # path = "compute_seg_indptr_cuda_output.pt"
+    # run_and_compare(path)
     # >>> Compare Type: int32
     # 精度达标 (0/17, 0.000000% <= 0.100000%)
+
+    # 3.对比真实数据
+    src_path = "seg_indptr_kernel_debug_cuda0.pt"
+    expected_path = "seg_indptr_kernel_expected_cuda0.pt"
+    run_and_compare_real_data(src_path, expected_path)
+    # >>> Compare Type: int
+    # 精度达标 (0/129, 0.000000% <= 0.000000%)
