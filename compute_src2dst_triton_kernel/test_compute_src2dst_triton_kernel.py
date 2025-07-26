@@ -82,6 +82,59 @@ def run_and_compare(path):
     check_accuracy(src2dst, expected_output)
 
 
+def run_and_compare_real_data(src_path, expected_path):
+    """
+    [SRC2DST KERNEL REAL DATA]
+    >>reorder_ids:
+    Shape: torch.Size([1280])
+    Dtype: torch.int64
+    Device: cpu
+    First 10 elements: [1, 9, 17, 25, 33, 41, 49, 57, 65, 73]
+    >>src2dst:
+    Shape: torch.Size([1280])
+    Dtype: torch.int32
+    Device: cpu
+    First 10 elements: [114, 0, 45, 0, 99, 0, 46, 0, 98, 0]
+    >>numel: 1280
+    >>BLOCK_SIZE: 512
+    >>grid: (3,)
+    """
+    try:
+        data = torch.load(src_path, map_location=torch.device('cpu'))
+        expected_data = torch.load(expected_path, map_location=torch.device('cpu'))
+    except FileNotFoundError:
+        print(f"File {src_path} or {expected_path} not found. Please run the test to generate it.")
+        return
+    print("\n[SRC2DST KERNEL REAL DATA]")
+
+    for key, value in data.items():
+        if isinstance(value, torch.Tensor):
+            print(f">>{key}:")
+            print(f"  Shape: {value.cpu().shape}")
+            print(f"  Dtype: {value.cpu().dtype}")
+            print(f"  Device: {value.cpu().device}")
+            # 打印前10个元素
+            print(f"  First 10 elements: {value.cpu().flatten()[:10].tolist()}")
+        else:
+            print(f">>{key}: {value}")
+    
+    reorder_ids = data["reorder_ids"].npu()
+    src2dst = data["src2dst"].npu()
+    BLOCK_SIZE = data["BLOCK_SIZE"]
+    num_toks = data["numel"]
+
+    compute_src2dst_impl(
+        reorder_ids=reorder_ids,
+        src2dst=src2dst,
+        num_toks=num_toks,
+        BLOCK_SIZE=BLOCK_SIZE,
+    )
+
+    expected_output = expected_data["src2dst"].npu()
+
+    check_accuracy(src2dst, expected_output)
+
+
 ## zhanpeng testcase
 def test_compute_src2dst_triton_no_conflict():
     import numpy as np
@@ -109,13 +162,15 @@ def test_compute_src2dst_triton_no_conflict():
 
 
 if __name__ == "__main__":
+    # 1. 编译测试
     # path = "compute_src2dst_npu_output.pt"
     # save_inputs_outputs(path, BLOCK_SIZE=64) # >> Compute src2dst: [0 1 2 3 4 5]
     # save_inputs_outputs(path, BLOCK_SIZE=128) # >> Compute src2dst: [0 0 1 2 3 4]
     ## TRITON_INTERPRET=1 python test_compute_src2dst_triton_kernel.py  >> Compute src2dst: [0 1 2 3 4 5]
 
-    path = "compute_src2dst_cuda_output.pt"
-    run_and_compare(path)  # 对比cuda和triton-ascend的输出
+    # 2.1 对比triton-ascend和cuda的输出
+    # path = "compute_src2dst_cuda_output.pt"
+    # run_and_compare(path)
     # >> reorder_ids: [0 1 2 3 4 5]
     # >> Block Size: 128
     # >> Compute src2dst: [0 0 1 2 3 4]
@@ -129,7 +184,8 @@ if __name__ == "__main__":
     # (4,): test=3.000000, ref=4.000000, diff=1.000000, rel=0.250000
     # (5,): test=4.000000, ref=5.000000, diff=1.000000, rel=0.200000
 
-    test_compute_src2dst_triton_no_conflict()
+    # 2.2 对比cuda和triton-ascend的输出(zhanpeng testcase)
+    # test_compute_src2dst_triton_no_conflict()
     # reorder_ids: tensor([0, 1, 2, 3, 4, 5], device='npu:0', dtype=torch.int32)
     # src2dst: tensor([0, 0, 1, 2, 3, 4], device='npu:0', dtype=torch.int32)
     # [W716 03:39:22.793892537 compiler_depend.ts:26] Warning: Warning: kernel [ArgSort] can not support dtype int32 or int64 on AiCore, Now this kernel is running on AiCpu.If you are more concerned about high-performance execution,please cast dtype to float32. (function operator())
@@ -140,3 +196,8 @@ if __name__ == "__main__":
     #     assert np.array_equal(excepted, actual), f"Expected {excepted}, but got {actual}"
     # AssertionError: Expected [0 1 2 3 4 5], but got [0 0 1 2 3 4]
     # [ERROR] 2025-07-16-03:39:23 (PID:67079, Device:0, RankID:-1) ERR99999 UNKNOWN applicaiton exception
+
+    # 3. 对比真实数据
+    src_path = "src2dst_kernel_debug_cuda0.pt"
+    expected_path = "src2dst_kernel_expected_cuda0.pt"
+    run_and_compare_real_data(src_path, expected_path)

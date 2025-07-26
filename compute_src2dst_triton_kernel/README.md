@@ -205,3 +205,106 @@ EH9999: [PID: 18805] 2025-07-22-01:57:23.438.337 wait for compute device to fini
         TraceBack (most recent call last):
  (function empty_cache)
 [ERROR] 2025-07-22-01:57:25 (PID:18805, Device:0, RankID:-1) ERR99999 UNKNOWN applicaiton exception
+
+
+
+------------------------------------ 真实数据测试输出(编译失败) -------------------------------------------------
+(triton) coder@candy-npu:~/workspace/sglang-test/compute_src2dst_triton_kernel$ python test_compute_src2dst_triton_kernel.py 
+
+[SRC2DST KERNEL REAL DATA]
+>>reorder_ids:
+  Shape: torch.Size([1280])
+  Dtype: torch.int64
+  Device: cpu
+  First 10 elements: [1, 9, 17, 25, 33, 41, 49, 57, 65, 73]
+>>src2dst:
+  Shape: torch.Size([1280])
+  Dtype: torch.int32
+  Device: cpu
+  First 10 elements: [114, 0, 45, 0, 99, 0, 46, 0, 98, 0]
+>>numel: 1280
+>>BLOCK_SIZE: 512
+>>grid: (3,)
+>>> Compare Type: int
+Traceback (most recent call last):
+  File "/home/coder/workspace/sglang-test/compute_src2dst_triton_kernel/test_compute_src2dst_triton_kernel.py", line 200, in <module>
+    run_and_compare_real_data(path)
+  File "/home/coder/workspace/sglang-test/compute_src2dst_triton_kernel/test_compute_src2dst_triton_kernel.py", line 133, in run_and_compare_real_data
+    check_accuracy(src2dst, excepted_output)
+  File "/home/coder/workspace/sglang-test/utils.py", line 31, in check_accuracy
+    fail = fail_mask.sum().item()
+RuntimeError: operator():build/CMakeFiles/torch_npu.dir/compiler_depend.ts:26 NPU function error: c10_npu::acl::AclrtSynchronizeStreamWithTimeout(copy_stream), error code is 507035
+[ERROR] 2025-07-26-08:47:57 (PID:2830600, Device:0, RankID:-1) ERR00100 PTA call acl api failed
+[Error]: The vector core execution is abnormal. 
+        Rectify the fault based on the error information in the ascend log.
+EZ9999: Inner Error!
+EZ9999: [PID: 2830600] 2025-07-26-08:47:56.224.615 The error from device(chipId:4, dieId:0), serial number is 16, there is an exception of aivec error, core id is 11, error code = 0x800000, dump info: pc start: 0x124000001000, current: 0x124000001278, vec error info: 0x69171127a5, mte error info: 0x40600009f, ifu error info: 0x1879583e0cc00, ccu error info: 0x33e39a3f51800022, cube error info: 0, biu error info: 0, aic error mask: 0x6500020bd00028c, para base: 0x12c102800800.[FUNC:ProcessStarsCoreErrorInfo][FILE:device_error_core_proc.cc][LINE:293]
+        TraceBack (most recent call last):
+       The extend info: errcode:(0x800000, 0, 0) errorStr: The DDR address of the MTE instruction is out of range. fixp_error0 info: 0x600009f, fixp_error1 info: 0x4, fsmId:0, tslot:0, thread:0, ctxid:0, blk:2, sublk:0, subErrType:4.[FUNC:ProcessStarsCoreErrorInfo][FILE:device_error_core_proc.cc][LINE:312]
+       Kernel task happen error, retCode=0x31, [vector core exception].[FUNC:PreCheckTaskErr][FILE:davinci_kernel_task.cc][LINE:1539]
+       AIV Kernel happen error, retCode=0x31.[FUNC:GetError][FILE:stream.cc][LINE:1190]
+       [AIC_INFO] after execute:args print end[FUNC:GetError][FILE:stream.cc][LINE:1190]
+       Aicore kernel execute failed, device_id=0, stream_id=2, report_stream_id=2, task_id=2, flip_num=0, fault kernel_name=compute_src2dst_triton_kernel_0, fault kernel info ext=compute_src2dst_triton_kernel, program id=1, hash=519200486047557799.[FUNC:GetError][FILE:stream.cc][LINE:1190]
+       rtStreamSynchronizeWithTimeout execute failed, reason=[vector core exception][FUNC:FuncErrorReason][FILE:error_message_manage.cc][LINE:53]
+       synchronize stream failed, runtime result = 507035[FUNC:ReportCallError][FILE:log_inner.cpp][LINE:161]
+
+[W726 08:47:57.758340180 compiler_depend.ts:526] Warning: NPU warning, error code is 507035[Error]: 
+[Error]: The vector core execution is abnormal. 
+        Rectify the fault based on the error information in the ascend log.
+EH9999: Inner Error!
+        rtDeviceSynchronizeWithTimeout execute failed, reason=[vector core exception][FUNC:FuncErrorReason][FILE:error_message_manage.cc][LINE:53]
+EH9999: [PID: 2830600] 2025-07-26-08:47:57.644.871 wait for compute device to finish failed, runtime result = 507035.[FUNC:ReportCallError][FILE:log_inner.cpp][LINE:161]
+        TraceBack (most recent call last):
+ (function npuSynchronizeUsedDevices)
+[W726 08:47:57.760689541 compiler_depend.ts:508] Warning: NPU warning, error code is 507035[Error]: 
+[Error]: The vector core execution is abnormal. 
+        Rectify the fault based on the error information in the ascend log.
+EH9999: Inner Error!
+        rtDeviceSynchronizeWithTimeout execute failed, reason=[vector core exception][FUNC:FuncErrorReason][FILE:error_message_manage.cc][LINE:53]
+EH9999: [PID: 2830600] 2025-07-26-08:47:57.647.362 wait for compute device to finish failed, runtime result = 507035.[FUNC:ReportCallError][FILE:log_inner.cpp][LINE:161]
+        TraceBack (most recent call last):
+ (function npuSynchronizeDevice)
+[W726 08:47:57.762748451 compiler_depend.ts:151] Warning: NPU warning, error code is 507035[Error]: 
+[Error]: The vector core execution is abnormal. 
+        Rectify the fault based on the error information in the ascend log.
+EH9999: Inner Error!
+        rtDeviceSynchronizeWithTimeout execute failed, reason=[vector core exception][FUNC:FuncErrorReason][FILE:error_message_manage.cc][LINE:53]
+EH9999: [PID: 2830600] 2025-07-26-08:47:57.649.435 wait for compute device to finish failed, runtime result = 507035.[FUNC:ReportCallError][FILE:log_inner.cpp][LINE:161]
+        TraceBack (most recent call last):
+ (function empty_cache)
+[W726 08:47:57.764583810 compiler_depend.ts:508] Warning: NPU warning, error code is 507035[Error]: 
+[Error]: The vector core execution is abnormal. 
+        Rectify the fault based on the error information in the ascend log.
+EH9999: Inner Error!
+        rtDeviceSynchronizeWithTimeout execute failed, reason=[vector core exception][FUNC:FuncErrorReason][FILE:error_message_manage.cc][LINE:53]
+EH9999: [PID: 2830600] 2025-07-26-08:47:57.651.419 wait for compute device to finish failed, runtime result = 507035.[FUNC:ReportCallError][FILE:log_inner.cpp][LINE:161]
+        TraceBack (most recent call last):
+ (function npuSynchronizeDevice)
+[W726 08:47:57.766453959 compiler_depend.ts:151] Warning: NPU warning, error code is 507035[Error]: 
+[Error]: The vector core execution is abnormal. 
+        Rectify the fault based on the error information in the ascend log.
+EH9999: Inner Error!
+        rtDeviceSynchronizeWithTimeout execute failed, reason=[vector core exception][FUNC:FuncErrorReason][FILE:error_message_manage.cc][LINE:53]
+EH9999: [PID: 2830600] 2025-07-26-08:47:57.653.299 wait for compute device to finish failed, runtime result = 507035.[FUNC:ReportCallError][FILE:log_inner.cpp][LINE:161]
+        TraceBack (most recent call last):
+ (function empty_cache)
+
+------------------------------------ 真实数据测试输出(TRITON_INTERPRET=1:编译成功，精度达标) -------------------------------------------------
+(triton) coder@candy-npu:~/workspace/sglang-test/compute_src2dst_triton_kernel$  TRITON_INTERPRET=1 python test_compute_src2dst_triton_kernel.py 
+
+[SRC2DST KERNEL REAL DATA]
+>>reorder_ids:
+  Shape: torch.Size([1280])
+  Dtype: torch.int64
+  Device: cpu
+  First 10 elements: [1, 9, 17, 25, 33, 41, 49, 57, 65, 73]
+>>src2dst:
+  Shape: torch.Size([1280])
+  Dtype: torch.int32
+  Device: cpu
+  First 10 elements: [114, 0, 45, 0, 99, 0, 46, 0, 98, 0]
+>>numel: 1280
+>>BLOCK_SIZE: 512
+>>grid: (3,)
+>>> Compare Type: int
+精度达标 (0/1280, 0.000000% <= 0.000000%)
