@@ -220,10 +220,11 @@ def run_and_compare_real_data(
     chunk_size = data["chunk_size"]
     BLOCK_SIZE = data["BLOCK_SIZE"]
 
-    if USE_BLOCK_SIZE:
+    if USE_BLOCK_SIZE and not autotune:
         # 使用自定义的 BLOCK_SIZE
         BLOCK_SIZE = block_size
-        print(f">>>[INFO] Using BLOCK_SIZE: {BLOCK_SIZE}")
+    
+    print(f">>>[INFO] Using BLOCK_SIZE: {BLOCK_SIZE}")
 
     if save_output:
         memcpy_triton_kernel_impl(
@@ -248,7 +249,22 @@ def run_and_compare_real_data(
             "BLOCK_SIZE": BLOCK_SIZE,
         }, expected_path)
 
+    if autotune:
+        print("\n>>> Test AutoTune First, Using autotuned Triton kernel")
+        memcpy_triton_kernel_impl(
+            dst_tensor=dst_tensor,
+            src_tensor=src_tensor,
+            offset_tensor=offset_tensor,
+            sz_tensor=size_tensor,
+            offset_src=offset_src,  # 是否对源数据应用偏移
+            chunk_size=chunk_size,
+            BLOCK_SIZE=BLOCK_SIZE,
+            autotune=True,  # 使用自动调优
+        )
+        print(">>> Test AutoTune Done\n")
+
     if profiling:
+        print(">>> Profiling Started")
         profiling_test_cuda(
             memcpy_triton_kernel_impl,
             args=(dst_tensor, src_tensor, offset_tensor, size_tensor, offset_src, chunk_size, BLOCK_SIZE, autotune)
@@ -310,4 +326,4 @@ if __name__ == "__main__":
     run_and_compare_real_data(src_path, expected_path, save_output=False, autotune=True, profiling=True)
 
     # 3.2 测试 normal kernel 的性能
-    # run_and_compare_real_data(src_path, expected_path, save_output=False, autotune=False, profiling=True, USE_BLOCK_SIZE=True, block_size=8192)
+    # run_and_compare_real_data(src_path, expected_path, save_output=False, autotune=False, profiling=True)

@@ -85,8 +85,8 @@ def profiling_test_cuda(fn_triton, args=(), result_dir="cuda_profiling_results")
         for _ in range(LOOP):
             with record_function(fn_triton.__name__):
                 fn_triton(*args)
-                torch.cuda.synchronize()
             prof.step()
+        torch.cuda.synchronize()
     
     print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
 

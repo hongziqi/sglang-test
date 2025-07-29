@@ -16,7 +16,7 @@ memcpy_triton_autotune = triton.autotune(
         triton.Config(kwargs={"BLOCK_SIZE": 8192})
     ],
     key=["BLOCK_SIZE"],
-    auto_profile_dir="/home/coder/.autotune/memcpy_triton_kernel",
+    # auto_profile_dir="/home/coder/.autotune/memcpy_triton_kernel",
 )
 
 # 定义 memcpy_triton_kernel
@@ -163,6 +163,8 @@ def run_and_compare_real_data(
         accuracy: bool = True,  # 是否检查精度
         autotune: bool = False,  # 是否自动调优
         profiling: bool = False,  # 是否进行性能分析
+        USE_BLOCK_SIZE: bool = False,  # 是否使用 block_size
+        block_size: int = 8192  # 默认的 BLOCK_SIZE
     ):
     """
     [MEMCPY TRITON KERNEL REAL DATA]
@@ -237,6 +239,7 @@ def run_and_compare_real_data(
         # print("expected output(GPU):", expected_output)
         check_accuracy(dst_tensor, expected_output)
     if autotune:
+        print("\n>>> Test AutoTune First, Using autotuned Triton kernel")
         memcpy_triton_kernel_impl(
             dst_tensor=dst_tensor,
             src_tensor=src_tensor,
@@ -247,8 +250,12 @@ def run_and_compare_real_data(
             BLOCK_SIZE=BLOCK_SIZE,
             autotune=autotune,  # 是否自动调优
         )
-    if not autotune and profiling:
-        print("\n>>> Profiling the Normal Triton kernel, BLOCK_SIZE:", BLOCK_SIZE)
+        print(">>> Test AutoTune Done\n")
+    if USE_BLOCK_SIZE and not autotune:
+        # 使用自定义的 BLOCK_SIZE
+        BLOCK_SIZE = block_size
+    if profiling:
+        print("\n>>> Profiling the Triton kernel")
         profiling_test_npu(
             memcpy_triton_kernel_impl,
             args=(dst_tensor, src_tensor, offset_tensor, size_tensor, offset_src, chunk_size, BLOCK_SIZE, autotune),
@@ -308,8 +315,8 @@ if __name__ == "__main__":
     expected_path = "11_memcpy_triton_kernel_expected_cuda0.pt"
     # run_and_compare_real_data(src_path, expected_path, accuracy=True)
 
-    # 4.1 测试 autotune kernel 的性能
-    # run_and_compare_real_data(src_path, expected_path, accuracy=False, autotune=True)
+    # 4.1 测试 autotune kernel 的性能 4096
+    run_and_compare_real_data(src_path, expected_path, accuracy=False, autotune=True, profiling=True)
 
-    # 4.2 测试 normal kernel 的性能
-    run_and_compare_real_data(src_path, expected_path, accuracy=False, autotune=False, profiling=True)
+    # 4.2 测试 normal kernel 的性能 8192
+    # run_and_compare_real_data(src_path, expected_path, accuracy=False, autotune=False, profiling=True)
