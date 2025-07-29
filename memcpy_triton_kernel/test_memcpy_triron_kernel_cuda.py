@@ -6,7 +6,17 @@ import triton.language as tl
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from utils import check_accuracy
+from utils import check_accuracy, profiling_test_cuda
+
+
+# 定义自动调优配置
+memcpy_triton_autotune = triton.autotune(
+    configs=[
+        triton.Config(kwargs={"BLOCK_SIZE": 4096}),
+        triton.Config(kwargs={"BLOCK_SIZE": 8192})
+    ],
+    key=["BLOCK_SIZE"],
+)
 
 
 # 定义 memcpy_triton_kernel
@@ -36,6 +46,9 @@ def memcpy_triton_kernel(
         tl.store(dst_ptr + offset + start_index + offs, data, mask=mask)
 
 
+memcpy_triton_kernel_autotuned = memcpy_triton_autotune(memcpy_triton_kernel)
+
+
 def memcpy_triton_kernel_impl(
     dst_tensor: torch.Tensor,  # 目标指针 (num_tokens,)
     src_tensor: torch.Tensor,  # 源指针 (num_tokens,)
@@ -44,23 +57,37 @@ def memcpy_triton_kernel_impl(
     offset_src: bool = False,  # 是否对源数据应用偏移
     chunk_size: int = 1,  # 块大小倍数
     BLOCK_SIZE: int = 256,  # 每个线程块的大小
+    autotune: bool = False,  # 是否自动调优
 ):
     """
     执行内存复制操作。
     """
     max_size = min(dst_tensor.numel(), src_tensor.numel())
-    grid = lambda meta: (triton.cdiv(max_size, BLOCK_SIZE),)
-
-    # 启动 Triton 内核
-    memcpy_triton_kernel[grid](
-        dst_ptr=dst_tensor,
-        src_ptr=src_tensor,
-        offset_ptr=offset_tensor,
-        sz_ptr=sz_tensor,
-        offset_src=offset_src,
-        chunk_size=chunk_size,
-        BLOCK_SIZE=BLOCK_SIZE,
-    )
+    if autotune:
+        # print(">>> Using autotuned Triton kernel")
+        # 使用自动调优的 Triton 内核
+        grid = lambda meta: (triton.cdiv(max_size, meta["BLOCK_SIZE"]),)
+        memcpy_triton_kernel_autotuned[grid](
+            dst_ptr=dst_tensor,
+            src_ptr=src_tensor,
+            offset_ptr=offset_tensor,
+            sz_ptr=sz_tensor,
+            offset_src=offset_src,
+            chunk_size=chunk_size,
+        )
+    else:
+        # print(">>> Using regular Triton kernel, BLOCK_SIZE:", BLOCK_SIZE)
+        # 使用普通的 Triton 内核
+        grid = lambda meta: (triton.cdiv(max_size, BLOCK_SIZE),)
+        memcpy_triton_kernel[grid](
+            dst_ptr=dst_tensor,
+            src_ptr=src_tensor,
+            offset_ptr=offset_tensor,
+            sz_ptr=sz_tensor,
+            offset_src=offset_src,
+            chunk_size=chunk_size,
+            BLOCK_SIZE=BLOCK_SIZE,
+        )
 
 
 def save_inputs_outputs(
@@ -132,32 +159,40 @@ def run_and_compare(path, atol: float = 1e-3, rtol: float = 1e-3):
         print(f"[{i}, {j}]: test={dst_tensor[i, j]}, ref={output_ref[i, j]}, diff={abs(dst_tensor[i, j] - output_ref[i, j])}")
 
 
-def run_and_compare_real_data(src_path, expected_path):
+def run_and_compare_real_data(
+        src_path: str, 
+        expected_path: str, 
+        save_output: bool = False,  # 是否保存运行结果
+        autotune: bool = False,  # 是否自动调优
+        profiling: bool = False,  # 是否进行性能分析
+        USE_BLOCK_SIZE: bool = False,  # 是否使用 BLOCK_SIZE
+        block_size: int = 8192  # 默认的 BLOCK_SIZE
+    ):
     """
     [MEMCPY TRITON KERNEL REAL DATA]
-    dst:
+    >> dst:
     Shape: torch.Size([4, 2048])
     Dtype: torch.bfloat16
     Device: cpu
     First 5 elements: [0.0, 0.0, 0.0, 0.0, 0.0]
-    src:
+    >> src:
     Shape: torch.Size([4, 2048])
     Dtype: torch.bfloat16
     Device: cpu
     First 5 elements: [0.0045166015625, -0.00823974609375, 0.0179443359375, 0.01300048828125, 3.0517578125e-05]
-    offset:
+    >> offset:
     Shape: torch.Size([])
     Dtype: torch.int64
     Device: cpu
     First 5 elements: [0]
-    sz:
+    >> sz:
     Shape: torch.Size([])
     Dtype: torch.int32
     Device: cpu
     First 5 elements: [2]
-    offset_src: False
-    chunk_size: 2048
-    BLOCK_SIZE: 8192
+    >> offset_src: False
+    >> chunk_size: 2048
+    >> BLOCK_SIZE: 8192
     """
     try:
         data = torch.load(src_path)
@@ -168,14 +203,14 @@ def run_and_compare_real_data(src_path, expected_path):
 
     for key, value in data.items():
         if isinstance(value, torch.Tensor):
-            print(f"{key}:")
+            print(f">> {key}:")
             print(f"  Shape: {value.cpu().shape}")
             print(f"  Dtype: {value.cpu().dtype}")
             print(f"  Device: {value.cpu().device}")
             # 打印前5个元素
-            print(f"  First 10 elements: {value.cpu().flatten()[:10].tolist()}")
+            print(f"  First 5 elements: {value.cpu().flatten()[:5].tolist()}")
         else:
-            print(f"{key}: {value}")
+            print(f">> {key}: {value}")
     
     src_tensor = data["src"].cuda()
     dst_tensor = data["dst"].cuda()
@@ -185,8 +220,13 @@ def run_and_compare_real_data(src_path, expected_path):
     chunk_size = data["chunk_size"]
     BLOCK_SIZE = data["BLOCK_SIZE"]
 
-    # 重新计算输出
-    memcpy_triton_kernel_impl(
+    if USE_BLOCK_SIZE:
+        # 使用自定义的 BLOCK_SIZE
+        BLOCK_SIZE = block_size
+        print(f">>>[INFO] Using BLOCK_SIZE: {BLOCK_SIZE}")
+
+    if save_output:
+        memcpy_triton_kernel_impl(
         dst_tensor=dst_tensor,
         src_tensor=src_tensor,
         offset_tensor=offset_tensor,
@@ -194,18 +234,25 @@ def run_and_compare_real_data(src_path, expected_path):
         offset_src=offset_src,  # 是否对源数据应用偏移
         chunk_size=chunk_size,
         BLOCK_SIZE=BLOCK_SIZE,
+        autotune=autotune,  # 是否自动调优
     )
+        print(f"Saving output to {expected_path}...")
+        # 存储新的路径
+        torch.save({
+            "src": src_tensor.cpu(),
+            "dst": dst_tensor.cpu(),
+            "offset": offset_tensor.cpu(),
+            "sz": size_tensor.cpu(),
+            "offset_src": offset_src,
+            "chunk_size": chunk_size,
+            "BLOCK_SIZE": BLOCK_SIZE,
+        }, expected_path)
 
-    # 存储新的路径
-    torch.save({
-        "src": src_tensor.cpu(),
-        "dst": dst_tensor.cpu(),
-        "offset": offset_tensor.cpu(),
-        "sz": size_tensor.cpu(),
-        "offset_src": offset_src,
-        "chunk_size": chunk_size,
-        "BLOCK_SIZE": BLOCK_SIZE,
-    }, expected_path)
+    if profiling:
+        profiling_test_cuda(
+            memcpy_triton_kernel_impl,
+            args=(dst_tensor, src_tensor, offset_tensor, size_tensor, offset_src, chunk_size, BLOCK_SIZE, autotune)
+        ) 
 
 
 # fffrog testcases
@@ -257,4 +304,10 @@ if __name__ == "__main__":
     # 2. 运行真实数据, 并保存运行结果
     src_path = "11_memcpy_triton_kernel_debug_cuda0.pt"
     expected_path = "11_memcpy_triton_kernel_expected_cuda0.pt"
-    run_and_compare_real_data(src_path, expected_path)
+    # run_and_compare_real_data(src_path, expected_path)
+
+    # 3.1 测试 autotune kernel 的性能
+    run_and_compare_real_data(src_path, expected_path, save_output=False, autotune=True, profiling=True)
+
+    # 3.2 测试 normal kernel 的性能
+    # run_and_compare_real_data(src_path, expected_path, save_output=False, autotune=False, profiling=True, USE_BLOCK_SIZE=True, block_size=8192)

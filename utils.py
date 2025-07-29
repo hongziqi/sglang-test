@@ -1,4 +1,5 @@
 import torch
+import os
 
 
 def check_accuracy(output: torch.Tensor, expected: torch.Tensor):
@@ -52,3 +53,82 @@ def check_accuracy(output: torch.Tensor, expected: torch.Tensor):
                   f"diff={abs_diff[idx_tuple].item():.6f}, rel={rel_diff[idx_tuple].item():.6f}")
 
     return fail_ratio
+
+
+def profiling_test_cuda(fn_triton, args=(), result_dir="cuda_profiling_results"):
+    """
+    用于测试triton kernel的profiling功能
+    :param fn_triton: triton kernel函数
+    :param args: 函数参数
+    :param activities: 需要记录的活动列表
+    :param result_path: 结果保存路径
+    """
+    skip_first = 10
+    wait = 0
+    warmup = 1
+    active = 30
+    repeat = 1
+    if not os.path.exists(result_dir):
+        os.makedirs(result_dir)
+    from torch.profiler import profile, record_function, ProfilerActivity
+    LOOP = skip_first + (wait + warmup + active) * repeat
+    print(f"[INFO] Profiling {fn_triton.__name__} with {LOOP} iterations...")
+    with profile(
+        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        schedule=torch.profiler.schedule(
+            wait=wait, warmup=warmup, active=active, repeat=repeat, skip_first=skip_first
+        ),
+        record_shapes=False,
+        profile_memory=False,
+        with_stack=False,
+    ) as prof:
+        for _ in range(LOOP):
+            with record_function(fn_triton.__name__):
+                fn_triton(*args)
+                torch.cuda.synchronize()
+            prof.step()
+    
+    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+
+    file_name_without_ext = os.path.splitext(fn_triton.__name__)[0]
+    new_path = f"{file_name_without_ext}_trace.json"
+    save_path = os.path.join(result_dir, new_path)
+
+    prof.export_chrome_trace(save_path)
+
+    print(f"[INFO] Profiling results saved to {save_path}")
+
+
+def profiling_test_npu(fn_triton, args=(), result_dir="npu_profiling_results"):
+    if not os.path.exists(result_dir):
+        os.makedirs(result_dir)
+    import torch_npu
+    skip_first = 10
+    wait = 0
+    warmup = 1
+    active = 30
+    repeat = 1
+    stream = torch.npu.current_stream()
+    experimental_config = torch_npu.profiler._ExperimentalConfig(
+        aic_metrics=torch_npu.profiler.AiCMetrics.PipeUtilization,
+        profiler_level=torch_npu.profiler.ProfilerLevel.Level1,
+        l2_cache=False,
+        data_simplification=False
+    )
+    with torch_npu.profiler.profile(
+            activities=[
+                torch_npu.profiler.ProfilerActivity.CPU,
+                torch_npu.profiler.ProfilerActivity.NPU
+            ],
+            schedule=torch_npu.profiler.schedule(wait=wait, warmup=warmup, active=active, repeat=repeat,
+                                                 skip_first=skip_first),
+            on_trace_ready=torch_npu.profiler.tensorboard_trace_handler(result_dir),
+            record_shapes=False,
+            profile_memory=False,
+            with_stack=False,
+            experimental_config=experimental_config) as prof:
+        stream.synchronize()
+        for i in range(skip_first + (wait + warmup + active) * repeat):
+            fn_triton(*args)
+            prof.step()
+        stream.synchronize()
