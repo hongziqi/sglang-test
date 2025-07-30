@@ -202,14 +202,14 @@ def run_and_compare_real_data_npu(
     :param USE_BLOCK_SIZE: 是否使用自定义 BLOCK_SIZE
     :param block_size: 自定义 BLOCK_SIZE 的值
     """
+    print(f"[DEBUG] KERLNEL NAME: {triton_kernel_impl.__name__}")
     try:
         data = torch.load(src_path, map_location=torch.device('cpu'))
         expected_data = torch.load(expected_path, map_location=torch.device('cpu'))
     except FileNotFoundError:
         print(f"File {src_path} or {expected_path} not found. Please run the test to generate it.")
         return
-
-    print(f"\n[REAL DATA INFO({triton_kernel_impl.__name__})]")
+    print(f"\n[REAL DATA INFO]")
     print_data_info(data)
 
     # 将输入数据加载到 NPU
@@ -244,7 +244,7 @@ def run_and_compare_real_data_npu(
             if key in kernel_args:
                 output_tensor = kernel_args[key]
                 expected_tensor = expected_data[key_mapping.get(key, key)].npu()
-                print(f"\n>>> Checking accuracy for {key}:")
+                print(f">>> Checking accuracy for ({key}):")
                 check_accuracy(output_tensor, expected_tensor)
         print(f"{'='*20} Checking accuracy done. {'='*20}")
 
@@ -263,6 +263,7 @@ def run_and_compare_real_data_npu(
     if profiling:
         # 按顺序提取参数值
         args = tuple(kernel_args[param] for param in param_order if param in kernel_args)
+        # print_data_info(args)
         print(f"\n{'='*20} Profiling the Triton kernel start, Autotune:{autotune} {'='*20}")
         profiling_test_npu(
             triton_kernel_impl,

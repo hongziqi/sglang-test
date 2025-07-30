@@ -6,7 +6,19 @@ import numpy as np
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from utils import check_accuracy
+from utils import check_accuracy, run_and_compare_real_data_cuda
+
+
+# 定义自动调优配置
+pre_reorder_triton_autotune = triton.autotune(
+    configs=[
+        triton.Config({'BLOCK_SIZE': 128}),
+        triton.Config({'BLOCK_SIZE': 256}),
+        triton.Config({'BLOCK_SIZE': 512}),
+        triton.Config({'BLOCK_SIZE': 1024}),
+    ],
+    key=[],
+)
 
 @triton.jit
 def pre_reorder_triton_kernel(
@@ -53,65 +65,7 @@ def pre_reorder_triton_kernel(
                 tl.store(dst_ptr + offset, out_data, mask=mask)
 
 
-# zhanpeng testcases
-def test_pre_reorder_triton():
-    num_tokens = 2
-    topk = 2
-    hidden_size = 4
-    num_experts = 3
-    start_expert_id = 0
-    end_expert_id = num_experts - 1
-    BLOCK_SIZE = 4
-
-    # 构造输入数据
-    input_data = torch.tensor([
-        [1.0, 2.0, 3.0, 4.0], 
-         [5.0, 6.0, 7.0, 8.0]
-    ], dtype=torch.float32, device="cuda")
-
-    topk_ids = torch.tensor([
-        [0, 1],
-        [1, 2]
-    ], dtype=torch.int32, device="cuda")
-
-    src2dst = torch.tensor([
-        [0, 2],
-        [1, 3]
-    ], dtype=torch.int32, device="cuda")
-
-    total_expanded_tokens = num_tokens * topk
-    gateup_input = torch.zeros((total_expanded_tokens, hidden_size), dtype=torch.float32, device="cuda")
-    a1_scales = torch.tensor([1.0, 2.0, 4.0], dtype=torch.float32, device="cuda")
-
-    grid = lambda meta: (num_tokens,)
-    pre_reorder_triton_kernel[grid](
-        input_ptr=input_data,
-        gateup_input_ptr=gateup_input,
-        src2dst_ptr=src2dst,
-        topk_ids_ptr=topk_ids,
-        a1_scales_ptr=a1_scales,
-        start_expert_id=start_expert_id,
-        end_expert_id=end_expert_id,
-        topk=topk,
-        hidden_size=hidden_size,
-        BLOCK_SIZE=BLOCK_SIZE,
-        use_per_token_if_dynamic=False,  # 设置为 False 以使用全局缩放
-    )
-    print("Gateup Input after pre-reorder:")
-    print(gateup_input)
-
-    # 手动计算期望值
-    excepted_output = np.array([
-        [1.0 / 1.0, 2.0 / 1.0, 3.0 / 1.0, 4.0 / 1.0],
-        [5.0 / 2.0, 6.0 / 2.0, 7.0 / 2.0, 8.0 / 2.0],
-        [1.0 / 2.0, 2.0 / 2.0, 3.0 / 2.0, 4.0 / 2.0],
-        [5.0 / 4.0, 6.0 / 4.0, 7.0 / 4.0, 8.0 / 4.0]
-    ], dtype=np.float32)
-
-    actual_output = gateup_input.cpu().numpy()
-
-    assert np.allclose(actual_output, excepted_output, atol=1e-3), "Test failed."
-    print("Test passed!")
+pre_reorder_triton_kernel_autotuned = pre_reorder_triton_autotune(pre_reorder_triton_kernel)
 
 
 def pre_reorder_impl(
@@ -126,26 +80,39 @@ def pre_reorder_impl(
     hidden_size: int,
     BLOCK_SIZE: int = 512,
     use_per_token_if_dynamic: bool = False,
+    autotune: bool = False,  # 是否自动调优
 ):
     num_tokens = input_data.shape[0]
 
     grid = lambda meta: (num_tokens,)
 
-    pre_reorder_triton_kernel[grid](
-        input_ptr=input_data,
-        gateup_input_ptr=gateup_input,
-        src2dst_ptr=src2dst,
-        topk_ids_ptr=topk_ids,
-        a1_scales_ptr=a1_scales,
-        start_expert_id=start_expert_id,
-        end_expert_id=end_expert_id,
-        topk=topk,
-        hidden_size=hidden_size,
-        BLOCK_SIZE=BLOCK_SIZE,
-        use_per_token_if_dynamic=use_per_token_if_dynamic,  # 设置为 False 以使用全局缩放
-    )
-
-    return gateup_input
+    if autotune:
+        pre_reorder_triton_kernel_autotuned[grid](
+            input_ptr=input_data,
+            gateup_input_ptr=gateup_input,
+            src2dst_ptr=src2dst,
+            topk_ids_ptr=topk_ids,
+            a1_scales_ptr=a1_scales,
+            start_expert_id=start_expert_id,
+            end_expert_id=end_expert_id,
+            topk=topk,
+            hidden_size=hidden_size,
+            use_per_token_if_dynamic=use_per_token_if_dynamic
+        )
+    else:
+        pre_reorder_triton_kernel[grid](
+            input_ptr=input_data,
+            gateup_input_ptr=gateup_input,
+            src2dst_ptr=src2dst,
+            topk_ids_ptr=topk_ids,
+            a1_scales_ptr=a1_scales,
+            start_expert_id=start_expert_id,
+            end_expert_id=end_expert_id,
+            topk=topk,
+            hidden_size=hidden_size,
+            BLOCK_SIZE=BLOCK_SIZE,
+            use_per_token_if_dynamic=use_per_token_if_dynamic,
+        )
 
 
 def save_inputs_outputs(path: str, num_tokens: int = 2, topk: int = 2, hidden_size: int = 4, num_experts: int = 3, start_expert_id: int = 0, end_expert_id: int = 2, BLOCK_SIZE: int = 4):
@@ -156,7 +123,7 @@ def save_inputs_outputs(path: str, num_tokens: int = 2, topk: int = 2, hidden_si
     gateup_input = torch.zeros((num_tokens * topk, hidden_size), dtype=torch.float32, device="cuda")
 
     a1_scales = torch.rand((end_expert_id - start_expert_id + 1), dtype=torch.float32, device="cuda")
-    gateup_input = pre_reorder_impl(
+    pre_reorder_impl(
         input_data=input_data,
         gateup_input=gateup_input,
         src2dst=src2dst,
@@ -202,7 +169,7 @@ def run_and_compare(path: str, atol: float = 1e-3, rtol: float = 1e-3):
     BLOCK_SIZE = data["BLOCK_SIZE"]
 
     # 重新计算输出
-    gateup_input = pre_reorder_impl(
+    pre_reorder_impl(
         input_data=input_data,
         gateup_input=gateup_input,
         src2dst=src2dst,
@@ -225,96 +192,6 @@ def run_and_compare(path: str, atol: float = 1e-3, rtol: float = 1e-3):
         print(f"[{i}, {j}]: test={gateup_input[i, j]}, ref={output_ref[i, j]}, diff={abs(gateup_input[i, j] - output_ref[i, j])}")
 
 
-def run_and_compare_real_data(src_path: str, expected_path: str):
-    """
-    [SEG INDPTR KERNEL REAL DATA]
-    >>hidden_states:
-    Shape: torch.Size([160, 2048])
-    Dtype: torch.bfloat16
-    Device: cpu
-    First 10 elements: [-0.03271484375, -0.0002899169921875, 0.017333984375, 0.04833984375, 0.0341796875, 0.0174560546875, -0.033935546875, -0.02734375, -0.03662109375, -0.01385498046875]
-    >>gateup_input:
-    Shape: torch.Size([1280, 2048])
-    Dtype: torch.bfloat16
-    Device: cpu
-    First 10 elements: [-0.15625, -0.1728515625, 0.28515625, 0.337890625, 0.65625, 0.0390625, -0.07568359375, -0.259765625, -0.185546875, -0.01385498046875]
-    >>src2dst:
-    Shape: torch.Size([1280])
-    Dtype: torch.int32
-    Device: cpu
-    First 10 elements: [800, 520, 40, 200, 960, 1120, 400, 680, 801, 521]
-    >>topk_ids:
-    Shape: torch.Size([160, 8])
-    Dtype: torch.int64
-    Device: cpu
-    First 10 elements: [92, 77, 18, 60, 97, 115, 71, 81, 92, 77]
-    >>w13_input_scale: None
-    >>start_expert_id: 0
-    >>end_expert_id: 15
-    >>top_k: 8
-    >>in_features: 2048
-    >>BLOCK_SIZE: 512
-    >>use_per_token_if_dynamic: True
-    """
-    try:
-        data = torch.load(src_path, map_location=torch.device('cpu'))
-    except FileNotFoundError:
-        print(f"File {src_path} not found. Please run the test to generate it.")
-        return
-    print("\n[SEG INDPTR KERNEL REAL DATA]")
-    for key, value in data.items():
-        if isinstance(value, torch.Tensor):
-            print(f">>{key}:")
-            print(f"  Shape: {value.cpu().shape}")
-            print(f"  Dtype: {value.cpu().dtype}")
-            print(f"  Device: {value.cpu().device}")
-            # 打印前10个元素
-            print(f"  First 10 elements: {value.cpu().flatten()[:10].tolist()}")
-        else:
-            print(f">>{key}: {value}")
-
-    hidden_states = data["hidden_states"].to("cuda")
-    gateup_input = torch.zeros_like(data["gateup_input"]).to("cuda")
-    src2dst = data["src2dst"].to("cuda")
-    topk_ids = data["topk_ids"].to("cuda")
-    w13_input_scale = data.get("w13_input_scale", None)
-    start_expert_id = data["start_expert_id"]
-    end_expert_id = data["end_expert_id"]
-    top_k = data["top_k"]
-    in_features = data["in_features"]
-    BLOCK_SIZE = data["BLOCK_SIZE"]
-    use_per_token_if_dynamic = data.get("use_per_token_if_dynamic", True)
-
-    # 重新计算输出
-    gateup_input = pre_reorder_impl(
-        input_data=hidden_states,
-        gateup_input=gateup_input,
-        src2dst=src2dst,
-        topk_ids=topk_ids,
-        a1_scales=w13_input_scale,
-        start_expert_id=start_expert_id,
-        end_expert_id=end_expert_id,
-        topk=top_k,
-        hidden_size=in_features,
-        BLOCK_SIZE=BLOCK_SIZE,
-        use_per_token_if_dynamic=use_per_token_if_dynamic,
-    )
-
-    torch.save({
-        "hidden_states": hidden_states.cpu(),
-        "gateup_input": gateup_input.cpu(),
-        "src2dst": src2dst.cpu(),
-        "topk_ids": topk_ids.cpu(),
-        "w13_input_scale": w13_input_scale.cpu() if w13_input_scale is not None else None,
-        "start_expert_id": start_expert_id,
-        "end_expert_id": end_expert_id,
-        "top_k": top_k,
-        "in_features": in_features,
-        "BLOCK_SIZE": BLOCK_SIZE,
-        "use_per_token_if_dynamic": use_per_token_if_dynamic,
-    }, expected_path)
-
-
 if __name__ == "__main__":
     # 1. 运行并比较结果
     # path = "pre_reorder_cuda_output.pt"
@@ -329,6 +206,47 @@ if __name__ == "__main__":
     # Max difference: 0.0
 
     # 2. 运行真实数据, 并保存运行结果
+    key_mapping = {
+        "input_data": "hidden_states",
+        "gateup_input": "gateup_input",
+        "src2dst": "src2dst",
+        "topk_ids": "topk_ids",
+        "a1_scales": "w13_input_scale",
+        "start_expert_id": "start_expert_id",
+        "end_expert_id": "end_expert_id",
+        "topk": "top_k",
+        "hidden_size": "in_features",
+        "BLOCK_SIZE": "BLOCK_SIZE",
+        "use_per_token_if_dynamic": "use_per_token_if_dynamic",
+    }
+    accuracy_dict = ["gateup_input"]
     src_path = "pre_reorder_kernel_debug_cuda0.pt"
     expected_path = "pre_reorder_kernel_expected_cuda0.pt"
-    run_and_compare_real_data(src_path, expected_path)
+    # run_and_compare_real_data_cuda(
+    #     triton_kernel_impl=pre_reorder_impl,
+    #     src_path=src_path,
+    #     expected_path=expected_path,
+    #     key_mapping=key_mapping,
+    #     save_output=True,  # 保存运行结果
+    # )
+
+    # 3.1 测试 autotune kernel 的性能 (BLOCK_SIZE: 1024)
+    # run_and_compare_real_data_cuda(
+    #     triton_kernel_impl=pre_reorder_impl,
+    #     key_mapping=key_mapping,
+    #     src_path=src_path,
+    #     expected_path=expected_path,
+    #     autotune=True,  # 启用自动调优
+    #     profiling=True,  # 启用性能分析
+    # )
+
+    # 3.2 测试 normal kernel 的性能 (BLOCK_SIZE: 512)
+    run_and_compare_real_data_cuda(
+        triton_kernel_impl=pre_reorder_impl,
+        key_mapping=key_mapping,
+        src_path=src_path,
+        expected_path=expected_path,
+        autotune=False,  # 不启用自动调优
+        profiling=True,  # 启用性能分析
+    )
+
