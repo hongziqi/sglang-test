@@ -6,7 +6,7 @@ import triton.language as tl
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from utils import check_accuracy, profiling_test_npu
+from utils import check_accuracy, profiling_test_npu, run_and_compare_real_data_npu
 
 
 # 定义自动调优配置
@@ -156,7 +156,7 @@ def run_and_compare(path):
 
     check_accuracy(dst_tensor, expected_output)
 
-
+# use run_and_compare_real_data_npu instead
 def run_and_compare_real_data(
         src_path: str, 
         expected_path: str, 
@@ -261,38 +261,6 @@ def run_and_compare_real_data(
             args=(dst_tensor, src_tensor, offset_tensor, size_tensor, offset_src, chunk_size, BLOCK_SIZE, autotune),
         )
 
-# fffrog testcases
-def run_memcpy_kernel():
-    # 定义输入和输出张量
-    device = torch.device("npu")
-    src_tensor = torch.arange(1024, dtype=torch.int32, device=device)  # 源张量
-    dst_tensor = torch.zeros_like(src_tensor)  # 目标张量
-
-    # 定义偏移量和大小
-    offset_tensor = torch.tensor([0], dtype=torch.int32, device=device)  # 偏移量
-    size_tensor = torch.tensor([1024], dtype=torch.int32, device=device)  # 数据大小
-
-    # 配置参数
-    BLOCK_SIZE = 256  # 每个线程块处理的数据大小
-    grid_size = triton.cdiv(1024, BLOCK_SIZE)  # 计算网格大小
-
-    # 调用 Triton 内核
-    memcpy_triton_kernel[(grid_size,)](
-        dst_tensor,  # 目标指针
-        src_tensor,  # 源指针
-        offset_tensor,  # 偏移量指针
-        size_tensor,  # 大小指针
-        offset_src=False,  # 是否对源数据应用偏移
-        chunk_size=1,  # 块大小倍数
-        BLOCK_SIZE=BLOCK_SIZE,  # 每个线程块的大小
-    )
-
-    # 打印结果
-    print("Source Tensor:")
-    print(src_tensor.cpu().numpy())
-    print("\nDestination Tensor (after memcpy):")
-    print(dst_tensor.cpu().numpy())
-
 
 if __name__ == "__main__":
     # 1. 编译测试
@@ -310,13 +278,46 @@ if __name__ == "__main__":
     # >>> Compare Type: float32
     # 精度达标 (0/1024, 0.000000% <= 0.010000%)
 
-    # 3. 对比真实数据
+    # 3. 对比真实数据并检查精度
+    key_mapping = {
+        "dst_tensor": "dst",
+        "src_tensor": "src",
+        "offset_tensor": "offset",
+        "sz_tensor": "sz",
+        "offset_src": "offset_src",
+        "chunk_size": "chunk_size",
+        "BLOCK_SIZE": "BLOCK_SIZE",
+    }
+    accuracy_dict = ["dst_tensor"]
     src_path = "11_memcpy_triton_kernel_debug_cuda0.pt"
     expected_path = "11_memcpy_triton_kernel_expected_cuda0.pt"
-    # run_and_compare_real_data(src_path, expected_path, accuracy=True)
+    run_and_compare_real_data_npu(
+        triton_kernel_impl=memcpy_triton_kernel_impl,
+        src_path=src_path,
+        expected_path=expected_path,
+        key_mapping=key_mapping,
+        accuracy=True,  # 是否检查精度
+        accuracy_dict=accuracy_dict,
+    )
 
-    # 4.1 测试 autotune kernel 的性能 4096
-    run_and_compare_real_data(src_path, expected_path, accuracy=False, autotune=True, profiling=True)
+    # 4.1 测试 autotune kernel 的性能 (BLOCK_SIZE:4096)
+    run_and_compare_real_data_npu(
+        triton_kernel_impl=memcpy_triton_kernel_impl,
+        src_path=src_path,
+        expected_path=expected_path,
+        key_mapping=key_mapping,
+        accuracy=False,  # 不检查精度
+        autotune=True,  # 启用自动调优
+        profiling=True,  # 启用性能分析
+    )
 
-    # 4.2 测试 normal kernel 的性能 8192
-    # run_and_compare_real_data(src_path, expected_path, accuracy=False, autotune=False, profiling=True)
+    # 4.2 测试 normal kernel 的性能 (BLOCK_SIZE:8192)
+    run_and_compare_real_data_npu(
+        triton_kernel_impl=memcpy_triton_kernel_impl,
+        src_path=src_path,
+        expected_path=expected_path,
+        key_mapping=key_mapping,
+        accuracy=False,  # 不检查精度
+        autotune=False,  # 不启用自动调优
+        profiling=True,  # 启用性能分析
+    )

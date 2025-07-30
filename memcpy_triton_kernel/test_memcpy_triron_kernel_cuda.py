@@ -6,7 +6,7 @@ import triton.language as tl
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from utils import check_accuracy, profiling_test_cuda
+from utils import check_accuracy, profiling_test_cuda, run_and_compare_real_data_cuda
 
 
 # 定义自动调优配置
@@ -318,12 +318,43 @@ if __name__ == "__main__":
     # Max difference: 0.0
 
     # 2. 运行真实数据, 并保存运行结果
+    key_mapping = {
+        "dst_tensor": "dst",
+        "src_tensor": "src",
+        "offset_tensor": "offset",
+        "sz_tensor": "sz",
+        "offset_src": "offset_src",
+        "chunk_size": "chunk_size",
+        "BLOCK_SIZE": "BLOCK_SIZE",
+    }
     src_path = "11_memcpy_triton_kernel_debug_cuda0.pt"
     expected_path = "11_memcpy_triton_kernel_expected_cuda0.pt"
-    # run_and_compare_real_data(src_path, expected_path)
+    # run_and_compare_real_data_cuda(
+    #     triton_kernel_impl=memcpy_triton_kernel_impl,
+    #     src_path=src_path,
+    #     expected_path=expected_path,
+    #     key_mapping=key_mapping,
+    #     save_output=True,  # 保存运行结果
+    # )
 
     # 3.1 测试 autotune kernel 的性能
-    run_and_compare_real_data(src_path, expected_path, save_output=False, autotune=True, profiling=True)
+    run_and_compare_real_data_cuda(
+        triton_kernel_impl=memcpy_triton_kernel_impl,
+        src_path=src_path,
+        expected_path=expected_path,
+        key_mapping=key_mapping,
+        save_output=False,  # 不保存运行结果
+        autotune=True,  # 使用自动调优
+        profiling=True,  # 进行性能分析
+    )
 
     # 3.2 测试 normal kernel 的性能
-    # run_and_compare_real_data(src_path, expected_path, save_output=False, autotune=False, profiling=True)
+    run_and_compare_real_data_cuda(
+        triton_kernel_impl=memcpy_triton_kernel_impl,
+        src_path=src_path,
+        expected_path=expected_path,
+        key_mapping=key_mapping,
+        save_output=False,  # 不保存运行结果
+        autotune=False,  # 不使用自动调优
+        profiling=True,  # 进行性能分析
+    )
