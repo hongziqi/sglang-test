@@ -6,7 +6,20 @@ import triton.language as tl
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from utils import check_accuracy
+from utils import check_accuracy, run_and_compare_real_data_npu
+
+
+# 定义自动调优配置
+compute_src2dst_triton_autotune = triton.autotune(
+    configs=[
+        triton.Config({'BLOCK_SIZE': 128}),
+        triton.Config({'BLOCK_SIZE': 256}),
+        triton.Config({'BLOCK_SIZE': 512}),
+        triton.Config({'BLOCK_SIZE': 1024}),
+    ],
+    key=[],
+    auto_profile_dir="/home/coder/.autotune",
+)
 
 
 @triton.jit
@@ -20,19 +33,31 @@ def compute_src2dst_triton_kernel(
     tl.store(src2dst + src_id, dst_id, mask=mask)
 
 
+compute_src2dst_triton_kernel_autotuned = compute_src2dst_triton_autotune(compute_src2dst_triton_kernel)
+
+
 def compute_src2dst_impl(
     reorder_ids: torch.Tensor,  # (num_toks,)
     src2dst: torch.Tensor,      # (num_toks, num_toks)
     num_toks: int,              # Total number of tokens
     BLOCK_SIZE: int = 512,      # Block size for processing
+    autotune: bool = False,  # 是否自动调优
 ):
-    grid = lambda meta:((num_toks + meta["BLOCK_SIZE"] - 1) // meta["BLOCK_SIZE"],)
-    compute_src2dst_triton_kernel[grid](
-        reorder_ids=reorder_ids,
-        src2dst=src2dst,
-        num_toks=num_toks,
-        BLOCK_SIZE=BLOCK_SIZE,
-    )
+    if autotune:
+        grid = lambda meta:((num_toks + meta["BLOCK_SIZE"] - 1) // meta["BLOCK_SIZE"],)
+        compute_src2dst_triton_kernel_autotuned[grid](
+            reorder_ids=reorder_ids,
+            src2dst=src2dst,
+            num_toks=num_toks,
+        )
+    else:
+        grid = lambda meta: ((num_toks + BLOCK_SIZE - 1) // BLOCK_SIZE,)
+        compute_src2dst_triton_kernel[grid](
+            reorder_ids=reorder_ids,
+            src2dst=src2dst,
+            num_toks=num_toks,
+            BLOCK_SIZE=BLOCK_SIZE,
+        )
 
 
 def save_inputs_outputs(path: str, num_toks: int = 6, BLOCK_SIZE: int = 64):
@@ -129,6 +154,7 @@ def run_and_compare_real_data(src_path, expected_path):
         num_toks=num_toks,
         BLOCK_SIZE=BLOCK_SIZE,
     )
+    print(">> Test output:", src2dst.cpu().numpy())
 
     expected_output = expected_data["src2dst"].npu()
 
@@ -197,7 +223,43 @@ if __name__ == "__main__":
     # AssertionError: Expected [0 1 2 3 4 5], but got [0 0 1 2 3 4]
     # [ERROR] 2025-07-16-03:39:23 (PID:67079, Device:0, RankID:-1) ERR99999 UNKNOWN applicaiton exception
 
-    # 3. 对比真实数据
+    # 3.对比真实数据并检查精度
+    key_mapping = {
+        "reorder_ids": "reorder_ids",
+        "src2dst": "src2dst",
+        "num_toks": "numel",
+        "BLOCK_SIZE": "BLOCK_SIZE",
+    }
+    accuracy_dict = ["src2dst"]
     src_path = "src2dst_kernel_debug_cuda0.pt"
     expected_path = "src2dst_kernel_expected_cuda0.pt"
-    run_and_compare_real_data(src_path, expected_path)
+    # run_and_compare_real_data_npu(
+    #     triton_kernel_impl=compute_src2dst_impl,
+    #     src_path=src_path,
+    #     expected_path=expected_path,
+    #     key_mapping=key_mapping,
+    #     accuracy=True,  # 是否检查精度
+    #     accuracy_dict=accuracy_dict,
+    # )
+
+    # 4.1 测试 autotune kernel 的性能 (BLOCK_SIZE: 128)
+    # run_and_compare_real_data_npu(
+    #     triton_kernel_impl=compute_src2dst_impl,
+    #     src_path=src_path,
+    #     expected_path=expected_path,
+    #     key_mapping=key_mapping,
+    #     accuracy=False,  # 是否检查精度
+    #     autotune=True,  # 是否使用自动调优
+    #     profiling=True,  # 启用性能分析
+    # )
+
+    # 4.2 测试 normal kernel 的性能 (BLOCK_SIZE: 512)
+    run_and_compare_real_data_npu(
+        triton_kernel_impl=compute_src2dst_impl,
+        src_path=src_path,
+        expected_path=expected_path,
+        key_mapping=key_mapping,
+        accuracy=False,  # 是否检查精度
+        autotune=False,  # 不使用自动调优
+        profiling=True,  # 启用性能分析
+    )
