@@ -6,7 +6,7 @@ import triton.language as tl
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from utils import check_accuracy
+from utils import check_accuracy, profiling_test_npu
 
 @triton.jit
 def compute_seg_indptr_triton_kernel(reorder_topk_ids, seg_indptr, num_toks):
@@ -106,7 +106,12 @@ def run_and_compare(path):
     check_accuracy(seg_indptr, expected_output)
 
 
-def run_and_compare_real_data(src_path, expected_path):
+def run_and_compare_real_data(
+        src_path, 
+        expected_path,
+        accuracy: bool = True,  # 是否检查精度
+        profiling: bool = False,  # 是否进行性能分析
+    ):
     """
     [SEG INDPTR KERNEL REAL DATA]
     >>reorder_topk_ids:
@@ -146,15 +151,23 @@ def run_and_compare_real_data(src_path, expected_path):
     seg_indptr = data["seg_indptr"].npu()
     numel = data["numel"]
     num_experts = data["num_experts"]
-    # 重新计算输出
-    compute_seg_indptr_impl(
-        reorder_topk_ids=reorder_topk_ids,
-        seg_indptr=seg_indptr,
-        num_toks=numel,
-    )
-    expected_output = expected_data["seg_indptr"].npu()
+    if accuracy:
+        # 重新计算输出
+        compute_seg_indptr_impl(
+            reorder_topk_ids=reorder_topk_ids,
+            seg_indptr=seg_indptr,
+            num_toks=numel,
+        )
+        expected_output = expected_data["seg_indptr"].npu()
 
-    check_accuracy(seg_indptr, expected_output)
+        check_accuracy(seg_indptr, expected_output)
+    if profiling:
+        print("\n>>> Profiling the Triton kernel")
+        profiling_test_npu(
+            compute_seg_indptr_impl,
+            args=(reorder_topk_ids, seg_indptr, numel),
+        )
+
 
 
 if __name__ == "__main__":
@@ -172,6 +185,9 @@ if __name__ == "__main__":
     # 3.对比真实数据
     src_path = "seg_indptr_kernel_debug_cuda0.pt"
     expected_path = "seg_indptr_kernel_expected_cuda0.pt"
-    run_and_compare_real_data(src_path, expected_path)
+    # run_and_compare_real_data(src_path, expected_path)
     # >>> Compare Type: int
     # 精度达标 (0/129, 0.000000% <= 0.000000%)
+
+    # 4 测试 kernel 的性能
+    run_and_compare_real_data(src_path, expected_path, accuracy=False, profiling=True)

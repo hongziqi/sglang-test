@@ -5,7 +5,7 @@ import triton.language as tl
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from utils import check_accuracy
+from utils import check_accuracy, profiling_test_cuda
 
 @triton.jit
 def compute_seg_indptr_triton_kernel(reorder_topk_ids, seg_indptr, num_toks):
@@ -114,7 +114,12 @@ def run_and_compare(path, atol: float = 1, rtol: float = 1e-3):
         print(f"[{i}, {j}]: test={seg_indptr[i, j]}, ref={output_ref[i, j]}, diff={abs(seg_indptr[i, j] - output_ref[i, j])}")
 
 
-def run_and_compare_real_data(src_path, expected_path):
+def run_and_compare_real_data(
+        src_path, 
+        expected_path,
+        save_output: bool = False,  # 是否保存运行结果
+        profiling: bool = False,  # 是否进行性能分析
+    ):
     """
     [SEG INDPTR KERNEL REAL DATA]
     >>reorder_topk_ids:
@@ -152,19 +157,27 @@ def run_and_compare_real_data(src_path, expected_path):
     numel = data["numel"]
     num_experts = data["num_experts"]
 
-    # 重新计算输出
-    compute_seg_indptr_impl(
-        reorder_topk_ids=reorder_topk_ids,
-        seg_indptr=seg_indptr,
-        num_toks=numel,
-    )
+    if save_output:
+        # 重新计算输出
+        compute_seg_indptr_impl(
+            reorder_topk_ids=reorder_topk_ids,
+            seg_indptr=seg_indptr,
+            num_toks=numel,
+        )
+        print(f"Saving output to {expected_path}...")
+        torch.save({
+            "reorder_topk_ids": reorder_topk_ids.cpu(),
+            "seg_indptr": seg_indptr.cpu(),
+            "numel": numel,
+            "num_experts": num_experts,
+        }, expected_path)
 
-    torch.save({
-        "reorder_topk_ids": reorder_topk_ids.cpu(),
-        "seg_indptr": seg_indptr.cpu(),
-        "numel": numel,
-        "num_experts": num_experts,
-    }, expected_path)
+    if profiling:
+        print(">>> Profiling Started")
+        profiling_test_cuda(
+            compute_seg_indptr_impl,
+            args=(reorder_topk_ids, seg_indptr, numel),
+        )
 
 
 if __name__ == "__main__":
@@ -181,4 +194,7 @@ if __name__ == "__main__":
     # 2. 运行真实数据, 并保存运行结果
     src_path = "seg_indptr_kernel_debug_cuda0.pt"
     expected_path = "seg_indptr_kernel_expected_cuda0.pt"
-    run_and_compare_real_data(src_path, expected_path)
+    # run_and_compare_real_data(src_path, expected_path)
+
+    # 3 测试 kernel 的性能
+    run_and_compare_real_data(src_path, expected_path, save_output=False, profiling=True)
