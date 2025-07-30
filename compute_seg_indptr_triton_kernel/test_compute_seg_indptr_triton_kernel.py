@@ -45,27 +45,6 @@ def compute_seg_indptr_impl(
     )
 
 
-# zhanpeng testcases
-def test_compute_seg_indptr_triton():
-    # 输入数据（必须已排序）
-    reorder_topk_ids = torch.tensor([0, 0, 1, 1, 1, 2, 2], dtype=torch.int32, device="npu")
-    num_toks = reorder_topk_ids.shape[0]
-
-    num_experts = 3
-
-    seg_indptr = torch.zeros(num_experts + 1, dtype=torch.int32, device="npu")
-
-    grid = lambda meta: (num_experts,)
-    compute_seg_indptr_triton_kernel[grid](reorder_topk_ids, seg_indptr, num_toks)
-
-    seg_indptr_cpu = seg_indptr.cpu().numpy()
-    print("Computed seg_indptr:", seg_indptr_cpu)
-
-    expected = [0,2,5,7]
-    assert all(seg_indptr_cpu == expected), f"Expected {expected}, got{seg_indptr_cpu}"
-    print("Test Passed!")
-
-
 def save_inputs_outputs(path: str, num_toks: int = 8, num_experts: int = 3):
     # 初始化输入张量
     reorder_topk_ids = torch.zeros(num_toks, dtype=torch.int32, device="npu")
@@ -92,6 +71,7 @@ def save_inputs_outputs(path: str, num_toks: int = 8, num_experts: int = 3):
         "seg_indptr": seg_indptr.cpu(),
     }, path)
 
+
 def run_and_compare(path):
     data = torch.load(path)
     reorder_topk_ids = data["reorder_topk_ids"].to("npu")
@@ -107,70 +87,6 @@ def run_and_compare(path):
     # 检查结果
     expected_output = data["seg_indptr"].to("npu")
     check_accuracy(seg_indptr, expected_output)
-
-
-def run_and_compare_real_data(
-        src_path, 
-        expected_path,
-        accuracy: bool = True,  # 是否检查精度
-        profiling: bool = False,  # 是否进行性能分析
-    ):
-    """
-    [SEG INDPTR KERNEL REAL DATA]
-    >>reorder_topk_ids:
-    Shape: torch.Size([1280])
-    Dtype: torch.int64
-    Device: cpu
-    First 10 elements: [45, 45, 45, 45, 45, 45, 45, 45, 45, 45]
-    >>seg_indptr:
-    Shape: torch.Size([129])
-    Dtype: torch.int64
-    Device: cpu
-    First 10 elements: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    >>numel: 1280
-    >>num_experts: 128
-    """
-    try:
-        data = torch.load(src_path, map_location=torch.device('cpu'))
-        expected_data = torch.load(expected_path, map_location=torch.device('cpu'))
-    except Exception as e:
-        print(f"Error loading data from {src_path}: {e}")
-        return
-
-    for key, value in data.items():
-        if isinstance(value, torch.Tensor):
-            print(f">>{key}:")
-            print(f" Shape: {value.shape}")
-            print(f" Dtype: {value.dtype}")
-            print(f" Device: {value.device}")
-            # 打印前10个元素
-            print(f" First 10 elements: {value.flatten()[:10].tolist()}")
-        elif isinstance(value, int):
-            print(f">>{key}: {value}")
-        else:
-            print(f">>{key}: {value}")
-    
-    reorder_topk_ids = data["reorder_topk_ids"].npu()
-    seg_indptr = data["seg_indptr"].npu()
-    numel = data["numel"]
-    num_experts = data["num_experts"]
-    if accuracy:
-        # 重新计算输出
-        compute_seg_indptr_impl(
-            reorder_topk_ids=reorder_topk_ids,
-            seg_indptr=seg_indptr,
-            num_toks=numel,
-        )
-        expected_output = expected_data["seg_indptr"].npu()
-
-        check_accuracy(seg_indptr, expected_output)
-    if profiling:
-        print("\n>>> Profiling the Triton kernel")
-        profiling_test_npu(
-            compute_seg_indptr_impl,
-            args=(reorder_topk_ids, seg_indptr, numel),
-        )
-
 
 
 if __name__ == "__main__":
