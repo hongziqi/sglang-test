@@ -6,7 +6,7 @@ import triton.language as tl
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from utils import check_accuracy, profiling_test_npu
+from utils import check_accuracy, profiling_test_npu, run_and_compare_real_data_npu
 
 @triton.jit
 def compute_seg_indptr_triton_kernel(reorder_topk_ids, seg_indptr, num_toks):
@@ -29,7 +29,10 @@ def compute_seg_indptr_impl(
     reorder_topk_ids: torch.Tensor,  # (num_toks,)
     seg_indptr: torch.Tensor,        # (num_experts + 1,)
     num_toks: int,                   # Total number of tokens
+    autotune: bool = False,  # 是否自动调优
 ):
+    if autotune:
+        raise NotImplementedError("Autotune is not implemented for this kernel.")
     num_experts = seg_indptr.shape[0] - 1
 
     grid = lambda meta: (num_experts,)
@@ -182,12 +185,33 @@ if __name__ == "__main__":
     # >>> Compare Type: int32
     # 精度达标 (0/17, 0.000000% <= 0.100000%)
 
-    # 3.对比真实数据
+    # 3.对比真实数据并检查精度
+    key_mapping = {
+        "reorder_topk_ids": "reorder_topk_ids",
+        "seg_indptr": "seg_indptr",
+        "num_toks": "numel",
+        "num_experts": "num_experts",
+    }
+    accuracy_dict = ["seg_indptr"]
     src_path = "seg_indptr_kernel_debug_cuda0.pt"
     expected_path = "seg_indptr_kernel_expected_cuda0.pt"
-    # run_and_compare_real_data(src_path, expected_path)
+    # run_and_compare_real_data_npu(
+    #     triton_kernel_impl=compute_seg_indptr_impl,
+    #     src_path=src_path,
+    #     expected_path=expected_path,
+    #     key_mapping=key_mapping,
+    #     accuracy=True,  # 是否检查精度
+    #     accuracy_dict=accuracy_dict,
+    # )
     # >>> Compare Type: int
     # 精度达标 (0/129, 0.000000% <= 0.000000%)
 
-    # 4 测试 kernel 的性能
-    run_and_compare_real_data(src_path, expected_path, accuracy=False, profiling=True)
+    # 4. 测试 normal kernel 的性能
+    run_and_compare_real_data_npu(
+        triton_kernel_impl=compute_seg_indptr_impl,
+        src_path=src_path,
+        expected_path=expected_path,
+        key_mapping=key_mapping,
+        accuracy=False,  # 是否检查精度
+        profiling=True,  # 是否进行性能分析
+    )
