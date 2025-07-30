@@ -62,4 +62,4 @@ Self CUDA time total: 111.294us
 ## Result
 | 算子名称                 | GPU描述:耗时 | NPU描述:耗时 | 比例 | autotune描述:GPU耗时 | autotune描述:NPU耗时  | autotune比例 |
 | -------------------- | ----- | ----- | ----- | ----- | --- | ---------- | 
-| memcpy_triton_kernel | 512:3.710us |   512:12.708us    | 29.19% | 1024:3.030us | 128:12.674us | 23.9% |
+| pre_reorder_triton_kernel | 512:3.710us |   512:12.708us    | 29.19% | 1024:3.030us | 128:12.674us | 23.9% |
