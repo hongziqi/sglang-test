@@ -15,7 +15,7 @@ memcpy_triton_autotune = triton.autotune(
         triton.Config(kwargs={"BLOCK_SIZE": 4096}),
         triton.Config(kwargs={"BLOCK_SIZE": 8192})
     ],
-    key=["BLOCK_SIZE"],
+    key=[],
     # auto_profile_dir="/home/coder/.autotune/memcpy_triton_kernel",
 )
 
