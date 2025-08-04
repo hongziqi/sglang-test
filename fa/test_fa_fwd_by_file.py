@@ -83,6 +83,7 @@ import torch_npu
 import triton
 import triton.language as tl
 import os
+import re
 import time
 import pandas as pd
 from typing import Dict, Tuple, Optional, Any
@@ -375,16 +376,54 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 # ========== Triton Kernel 实现（保持不变） ==========
 
+
+def normalize_col_name(col: str) -> str:
+    """
+    标准化列名：去除非字母数字字符，转小写
+    """
+    return re.sub(r'[\s_\-]+', '', str(col).strip().lower())
+
+
+def standardize_dataframe_columns(df: pd.DataFrame, mapping: Dict[str, str]) -> pd.DataFrame:
+    """
+    根据 mapping 字典（原始列名 -> 目标字段名），标准化 DataFrame 的列名。
+    :param df: 原始 DataFrame
+    :param mapping: 原始列名（任意格式） -> 目标字段名（如 "Z", "H"）
+    :return: 列名已标准化的 DataFrame
+    """
+    # 创建标准化后的列名到原始列名的映射
+    normalized_to_raw = {normalize_col_name(col): col for col in df.columns}
+    
+    # 查找 mapping 中每个期望列名的实际列
+    rename_dict = {}
+    missing = []
+    for raw_name, target_name in mapping.items():
+        normalized_key = normalize_col_name(raw_name)
+        if normalized_key in normalized_to_raw:
+            actual_col = normalized_to_raw[normalized_key]
+            rename_dict[actual_col] = target_name
+        else:
+            missing.append(raw_name)
+    
+    if missing:
+        print(f"文件中缺失列: {missing}")
+    
+    # 重命名并返回
+    return df.rename(columns=rename_dict)
+
+
 def extract_test_case_data(
         paths: Dict[str, str],
         extract_map: Dict[str, str],
-        new_field: Optional[Dict[str, Any]] = None
+        new_field: Optional[Dict[str, Any]] = None,
+        filter_data: Optional[Dict[str, Any]] = None
     ) -> pd.DataFrame:
     """
     从多个 Excel 文件中提取测试用例数据。
     :param paths: 多个文件路径, 例如 {"file1": "path/to/file1", "file2": "path/to/file2"}
     :param extract_map: 提取字段映射
     :param new_field: 新字段及其值, 例如 {"new_field": "value"}
+    :param filter_data: 可选的过滤条件，字典形式，键为字段名，值为期望的值
     :return: 提取的测试用例数据
     Example:
     paths = {
@@ -411,11 +450,16 @@ def extract_test_case_data(
         "causal": False,
     }
     """
+    # 临时设置显示选项
+    pd.set_option('display.max_columns', None)        # 显示所有列
+    pd.set_option('display.width', None)              # 自动换行
+    pd.set_option('display.max_colwidth', 50)         # 列宽足够
     dfs = []
     for key, path in paths.items():
         df = pd.read_excel(path)
         df.insert(0, "step", key)   # 新增文件来源列
-        dfs.append(df)
+        df_std = standardize_dataframe_columns(df, extract_map)
+        dfs.append(df_std)
     if not dfs:
         raise ValueError("所有文件加载失败，请检查路径")
 
@@ -423,26 +467,28 @@ def extract_test_case_data(
 
     # 提取并重命名字段
     extract_map["step"] = "step"  # 确保 step 字段也被提取
-    missing_cols = [col for col in extract_map.keys() if col not in combined_df.columns]
-    if missing_cols:
-        raise KeyError(f"缺失列: {missing_cols}")
-    extracted_data = combined_df[list(extract_map.keys())].rename(columns=extract_map)
+    target_cols = ['step'] + list(extract_map.values())
+    # 只保留 extract_map 中定义的目标字段（包括新添加的 'step'）
+    extracted_data = combined_df[target_cols].copy()
 
     # 如果有新字段，添加到 DataFrame 中
     if new_field:
         for field, value in new_field.items():
-            extracted_data[field] = value
+            extracted_data.loc[:, field] = value
     # 映射数据类型
     if 'dtype' in extracted_data.columns:
-        extracted_data['dtype'] = extracted_data['dtype'].map(dtype_map)
+        extracted_data.loc[:, 'dtype'] = extracted_data['dtype'].map(dtype_map)
     # 确保 step 是首列
     columns = ["step"] + [col for col in extracted_data.columns if col != "step"]
     extracted_data = extracted_data[columns]
+    # 如果有过滤条件，应用过滤
+    if filter_data:
+        for key, value in filter_data.items():
+            if key in extracted_data.columns:
+                extracted_data = extracted_data[extracted_data[key] == value]
+            else:
+                print(f"警告: 过滤条件中的字段 '{key}' 在数据中不存在，跳过该过滤条件。")
     # 展示前10行数据
-    # 临时设置显示选项
-    pd.set_option('display.max_columns', None)        # 显示所有列
-    pd.set_option('display.width', None)              # 自动换行
-    pd.set_option('display.max_colwidth', 50)         # 列宽足够
     print("Extracted test cases (head):\n", extracted_data.head(10))
     return extracted_data
 
@@ -469,29 +515,6 @@ def compute_errors(ref: torch.Tensor, tri: torch.Tensor) -> Dict[str, float]:
         "err mean": diff.mean().item(),
         "rmse": torch.sqrt((diff ** 2).mean()).item(),
     }
-
-
-# def pytest_sessionfinish(session, exitstatus):
-#     """
-#     测试会话结束时，保存测试结果到文件
-#     """
-#     if not test_results:
-#         print(">> No test results to save. `test_results` is empty.")
-#         return
-#     try:
-#         timestamp = time.strftime("%Y%m%d_%H%M%S")
-#         result_file = os.path.join(RESULT_DIR, f"test_results_{timestamp}.xlsx")
-#         # 保留所有字段，没有字段则填充 ""
-#         df = pd.DataFrame(test_results).fillna("")
-#         df.to_excel(result_file, index=False)
-#         print(f"\n>> 测试完成，结果已保存至 {result_file}")
-#         print(f"总计 {len(df)} 个测试用例")
-#         print(f"通过: {len(df[df['Precision result'] == 'Pass'])}")
-#         print(f"失败: {len(df[df['Precision result'] == 'Fail'])}")
-#         print(f"异常: {len(df[df['Precision result'] == 'ERROR'])}")
-#     except Exception as e:
-#         print(f"保存测试结果时发生错误: {e}")
-#         pytest.fail(f"测试结果保存失败: {e}")
 
 
 # 测试用例生成
