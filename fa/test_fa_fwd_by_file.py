@@ -86,7 +86,9 @@ import os
 import re
 import time
 import pandas as pd
-from typing import Dict, Tuple, Optional, Any
+import subprocess
+import multiprocessing
+from typing import Dict, Tuple, Optional, Any, Union, List
 
 
 # ========== 全局变量和常量 ==========
@@ -170,7 +172,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         if fp8_v:
             p = p.to(tl.float8e5)
         else:
-            # p = p.to(tl.float16)
+            # p = p.to(tl.float16)      // FIXHERE to bfloat16 unspport
             p = p.to(v.dtype)
 
         # -------------------------------
@@ -184,6 +186,15 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
     return acc, l_i, m_i
 
 
+# @triton.autotune(
+#     configs=[
+#         triton.Config({"BLOCK_M": 64, "BLOCK_N": 64}),
+#         triton.Config({"BLOCK_M": 64, "BLOCK_N": 128}),
+#         triton.Config({"BLOCK_M": 64, "BLOCK_N": 256}),
+#         triton.Config({"BLOCK_M": 128, "BLOCK_N": 128}),
+#     ],
+#     key=["N_CTX", "HEAD_DIM"]
+# )
 @triton.jit
 def _attn_fwd(Q, K, V, M, Out, sm_scale,  #
               stride_qz: tl.constexpr, stride_qh: tl.constexpr, stride_qm: tl.constexpr, stride_qk: tl.constexpr,  #
@@ -328,7 +339,6 @@ class _attention(torch.autograd.Function):
         assert HEAD_DIM_K in {16, 32, 64, 128, 256}
 
         o = torch.empty_like(q)
-        print(f"[debug]o shape: {o.shape}, dtype: {o.dtype}")
 
         # stage = 3
         stage = 3 if causal else 1
@@ -369,7 +379,6 @@ class _attention(torch.autograd.Function):
         ctx.sm_scale = sm_scale
         ctx.HEAD_DIM = HEAD_DIM_K
         ctx.causal = causal
-        print(f"[debug]o after forward shape: {o.shape}, dtype: {o.dtype}")
         return o
 
 
@@ -466,7 +475,6 @@ def extract_test_case_data(
     combined_df = pd.concat(dfs, ignore_index=True).fillna("")  # 合并所有 DataFrame
 
     # 提取并重命名字段
-    extract_map["step"] = "step"  # 确保 step 字段也被提取
     target_cols = ['step'] + list(extract_map.values())
     # 只保留 extract_map 中定义的目标字段（包括新添加的 'step'）
     extracted_data = combined_df[target_cols].copy()
@@ -489,7 +497,7 @@ def extract_test_case_data(
             else:
                 print(f"警告: 过滤条件中的字段 '{key}' 在数据中不存在，跳过该过滤条件。")
     # 展示前10行数据
-    print("Extracted test cases (head):\n", extracted_data.head(10))
+    # print("Extracted test cases (head):\n", extracted_data.head(10))
     return extracted_data
 
 
@@ -525,8 +533,8 @@ def pytest_generate_tests(metafunc):
     if 'test_case' in metafunc.fixturenames:
         # 生成测试用例数据
         paths = {
-            "64": os.path.join(TEST_DATA_DIR, "FlashAttentionScore_step64_case_d64_Result.xls"),
-            "7": os.path.join(TEST_DATA_DIR, "FlashAttentionScore_step64+7_case_d64_Result.xls")
+            "step64": os.path.join(TEST_DATA_DIR, "FlashAttentionScore_step64_case_d64_Result.xls"),
+            "step64+7": os.path.join(TEST_DATA_DIR, "FlashAttentionScore_step64+7_d64_Result.xls")
         }
         extract_map = {
             "Group": "Group",
@@ -543,23 +551,43 @@ def pytest_generate_tests(metafunc):
             "Layout": "Layout",
         }
         new_field = {
-            "BM": 32,
-            "BN": 32,
+            "BM": 64,
+            "BN": 64,
             "causal": False,
         }
+        filter_data = {
+            "Layout": "BNSD",  # 只测试 BNSD 布局(4096)
+        }
         # 提取测试数据
-        test_data = extract_test_case_data(paths, extract_map, new_field)
+        test_data = extract_test_case_data(paths, extract_map, new_field, filter_data)
         test_cases = [row[valid_fields].to_dict() for _, row in test_data.iterrows()]
         # 确保只对 test_case 参数化一次
         metafunc.parametrize("test_case", test_cases, ids=[f"{case['step']}_{case['Testcase Name']}" for case in test_cases])
 
+        # # 非测试文件的测试案例
+        # test_cases = [
+        #     # [4, 32, 128, 128, False, torch.float16, 64, 128, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_1", 0],
+        #     # [4, 32, 64, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_2", 0],
+        #     # [1, 2, 1024, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_3", 0],
+        #     [4, 32, 1024, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_4", 0],
+        #     # [4, 32, 2048, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_5", 0],
+        #     # [4, 32, 4096, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_6", 0],
+        #     # [4, 32, 8192, 64, False, torch.float16, 32, 32, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_7", 0], # NPU out of memory. Tried to allocate 64.00 GiB
+        #     # [4, 32, 16384, 64, False, torch.float16, 32, 32, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_8", 0], # NPU out of memory. Tried to allocate 64.00 GiB
 
-def test_op_fwd(test_case:  Dict[str, Any]):
+        # ]
+        # metafunc.parametrize("test_case", test_cases, ids=[f"{case[8]}_{case[10]}" for case in test_cases])
+
+
+def test_op_fwd(test_case:  Union[Dict[str, Any], List[Any]]):
+    if isinstance(test_case, list):
+        # 如果是列表，转换为字典
+        test_case = {k: v for k, v in zip(valid_fields, test_case)}
     # Z, H, N_CTX, HEAD_DIM, causal, dtype, BM, BN, step, group, test_name, sparse_mode = test_case
     Z, H, N_CTX, HEAD_DIM, causal, dtype, BM, BN, step, group, test_name, sparse_mode = [test_case[k] for k in valid_fields]
-    print(f"\nRunning test case: {step}-{test_name} | Z={Z}, H={H}, N_CTX={N_CTX}, HEAD_DIM={HEAD_DIM}, causal={causal}, dtype={dtype}, BM={BM}, BN={BN}, sparse_mode={sparse_mode}")
+    # print(f"\nRunning test case: {step}-{test_name} | Z={Z}, H={H}, N_CTX={N_CTX}, HEAD_DIM={HEAD_DIM}, causal={causal}, dtype={dtype}, BM={BM}, BN={BN}, sparse_mode={sparse_mode}")
     torch.manual_seed(20)
-    # 创建输入张量 BNSB
+    # 创建输入张量 BNSD
     q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
     k = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
     v = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
@@ -568,25 +596,27 @@ def test_op_fwd(test_case:  Dict[str, Any]):
     try:
         M = torch.tril(torch.ones((N_CTX, N_CTX), device=DEVICE))
         p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
-        print(f"[debug]p shape: {p.shape}, dtype: {p.dtype}")
 
         if causal:
             p[:, :, M==0] = float('-inf')
         p = torch.softmax(p.float(), dim=-1).half().to(v.dtype)
-        print(f"[debug]p after softmax shape: {p.shape}, dtype: {p.dtype}")
 
         ref_out = torch.matmul(p, v)
-        print(f"[debug]ref_out shape: {ref_out.shape}, dtype: {ref_out.dtype}")
         # triton kernel
         tri_out = attention(q, k, v, causal, sm_scale, BM, BN)
-
-        print(f"[debug]tri_out shape: {tri_out.shape}, dtype: {tri_out.dtype}")
 
         atol, rtol = precision_atol_rtol(dtype)         # 误差分析
         errors = compute_errors(ref_out, tri_out)
         passed = torch.allclose(ref_out, tri_out, atol=atol, rtol=rtol)
+
+        def profiling_forward_fn():
+            attention(q, k, v, causal, sm_scale, BM, BN)
+
+        # 性能测试
+        # kernel_avg_time = do_bench_npu(profiling_forward_fn, keep_res=True)
+
         test_results.append({
-            "step": step,
+            "From": step,
             "Group": group,
             "Testcase Name": test_name,
             "B": Z,
@@ -594,20 +624,21 @@ def test_op_fwd(test_case:  Dict[str, Any]):
             "S1": N_CTX,
             "D": HEAD_DIM,
             "Dtype": dtype,
-            "sparse mode": sparse_mode,
+            "sparse mode": str(sparse_mode),
             "Layout": "BNSD",
             "BM": BM,
             "BN": BN,
             "causal": str(causal),
             "Precision result": "Pass" if passed else "Fail",
             **{f"Actual out {k}": v for k, v in errors.items()},
+            # "Actual kernel time forward": kernel_avg_time,
         })
 
-        assert passed, f"Test failed [{step}-{test_name}]| err_max={errors['err_max']:.2e}, atol={atol}, rtol={rtol}"
+        assert passed, f"Test failed [{step}-{test_name}]| err_max={errors['err max']:.2e}, atol={atol}, rtol={rtol}"
     except Exception as e:
         # 捕获异常并记录测试结果
         test_results.append({
-            "step": step,
+            "From": step,
             "Group": group,
             "Testcase Name": test_name,
             "B": Z,
@@ -615,7 +646,7 @@ def test_op_fwd(test_case:  Dict[str, Any]):
             "S1": N_CTX,
             "D": HEAD_DIM,
             "Dtype": dtype,
-            "sparse mode": sparse_mode,
+            "sparse mode": str(sparse_mode),
             "Layout": "BNSD",
             "BM": BM,
             "BN": BN,
@@ -623,4 +654,163 @@ def test_op_fwd(test_case:  Dict[str, Any]):
             "Precision result": "Error",
             "Error Message": str(e),
         })
+        print(f"Test case [{step}-{test_name}] failed with exception: {e}")
         pytest.fail(f"Test failed with exception [{step}-{test_name}]: {e}")
+
+
+def collect_single(base_dir: str, key: str = None) -> float:
+    if not os.path.exists(base_dir):
+        return float('inf')
+
+    import pandas as pd
+    for root, _, files in os.walk(base_dir):
+        for file in files:
+            if file != 'op_statistic.csv':
+                continue
+            target_file = os.path.join(root, file)
+            df = pd.read_csv(target_file)
+            if key is not None:
+                key_rows = df[df['OP Type'].str.startswith(key, na=False)]
+                if not key_rows.empty:
+                    return key_rows['Avg Time(us)'].values[0]
+                return float('inf')
+            else:
+                # default: read the first row except header
+                return df.loc[0, 'Avg Time(us)']
+
+    return float('inf')
+
+
+def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean", keep_res=False):
+    """
+    Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
+    the 20-th and 80-th performance percentile.
+
+    :param fn: Function to benchmark
+    :type fn: Callable
+    :param warmup: Warmup time (in ms)
+    :type warmup: int
+    :param rep: Repetition time (in ms)
+    :type rep: int
+    :param grad_to_none: Reset the gradient of the provided tensor to None
+    :type grad_to_none: torch.tensor, optional
+    :param quantiles: Performance percentile to return in addition to the median.
+    :type quantiles: list[float], optional
+    :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all" Default is "mean".    :type return_mode: str
+    """
+    assert return_mode in ["min", "max", "mean", "median", "all"]
+    import torch
+
+    enable_bench_npu = os.getenv("TRITON_BENCH_METHOD", 'default').lower() in ('npu')
+    enable_bench_gpu = os.getenv("TRITON_BENCH_METHOD", 'default').lower() in ('gpu')
+    if enable_bench_npu:
+        avg_times = do_bench_npu(fn, warmup=max(5, warmup), active=max(30, rep), keep_res=keep_res)
+        return _summarize_statistics(torch.tensor([avg_times], dtype=torch.float), quantiles, return_mode)
+    elif enable_bench_gpu:
+        avg_times = do_bench_gpu(fn, warmup=max(5, warmup), active=max(30, rep))
+        return _summarize_statistics(torch.tensor([avg_times], dtype=torch.float), quantiles, return_mode)
+
+
+def _summarize_statistics(times, quantiles, return_mode):
+    import torch
+    if quantiles is not None:
+        ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
+        if len(ret) == 1:
+            ret = ret[0]
+        return ret
+    if return_mode == "all":
+        return times.tolist()
+    return getattr(torch, return_mode)(times).item()
+
+
+def do_bench_npu(fn, warmup=5, active=30, prof_dir=None, keep_res=False):
+    import torch
+    import torch_npu
+    from datetime import datetime, timezone
+
+    stream = torch.npu.current_stream()
+    experimental_config = torch_npu.profiler._ExperimentalConfig(
+        aic_metrics=torch_npu.profiler.AiCMetrics.PipeUtilization,
+        profiler_level=torch_npu.profiler.ProfilerLevel.Level1,
+        l2_cache=False,
+        data_simplification=False
+    )
+    skip_first = 10
+    wait = 0
+    repeat = 1
+    total = skip_first + (wait + warmup + active) * repeat
+
+    if prof_dir is not None:
+        torch_path = prof_dir
+    else:
+        process = multiprocessing.current_process()
+        pid = process.pid
+        process_name = process.name
+        timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
+        base_path = os.path.join("", ".triton", "profile_results")
+        torch_path = os.path.join(base_path, f"prof_{timestamp}_{process_name}-{pid}")
+    with torch_npu.profiler.profile(
+        activities=[
+            torch_npu.profiler.ProfilerActivity.NPU
+        ],
+        schedule=torch_npu.profiler.schedule(wait=wait, warmup=warmup, active=active, repeat=repeat, skip_first=skip_first),
+        on_trace_ready=torch_npu.profiler.tensorboard_trace_handler(torch_path),
+        record_shapes=False,
+        profile_memory=False,
+        with_stack=False,
+        with_flops=False,
+        with_modules=False,
+        experimental_config=experimental_config,
+    ) as prof:
+        stream.synchronize()
+
+        for i in range(total):
+            fn()
+            prof.step()
+        stream.synchronize()
+
+    time = collect_single(torch_path)
+
+    if not keep_res:
+        import shutil
+        if os.path.exists(torch_path):
+            shutil.rmtree(torch_path)
+
+    return time
+
+
+def do_bench_gpu(fn, warmup=5, active=30):
+    from datetime import datetime, timezone
+
+    skip_first = 10
+    wait = 0
+    repeat = 1
+    total = skip_first + (wait + warmup + active) * repeat
+    with torch.profiler.profile(
+        activities=[torch.profiler.ProfilerActivity.CUDA],
+        record_shapes=False,
+        profile_memory=False,
+        with_stack=False,
+        with_flops=False,
+        with_modules=False,
+    ) as prof:
+        torch.cuda.synchronize()
+        for i in range(total):
+            fn()
+            prof.step()
+        torch.cuda.synchronize()
+
+    times = parse_prof(prof)
+
+    return times
+
+
+def parse_prof(prof):
+    event_list = prof.events()
+    parsed_times = []
+
+    for evt in event_list:
+        if evt.device_type == torch.profiler.DeviceType.CUDA:
+            parsed_times.append(evt.device_time_total)
+    
+    return parsed_times

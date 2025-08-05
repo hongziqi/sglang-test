@@ -91,7 +91,6 @@ import multiprocessing
 from typing import Dict, Tuple, Optional, Any, Union, List
 
 
-torch.npu.set_device(5)
 # ========== 全局变量和常量 ==========
 DEVICE = "npu"
 TEST_DATA_DIR = "./test_data"
@@ -187,15 +186,15 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
     return acc, l_i, m_i
 
 
-# @triton.autotune(
-#     configs=[
-#         triton.Config({"BLOCK_M": 64, "BLOCK_N": 64}),
-#         triton.Config({"BLOCK_M": 64, "BLOCK_N": 128}),
-#         triton.Config({"BLOCK_M": 64, "BLOCK_N": 256}),
-#         triton.Config({"BLOCK_M": 128, "BLOCK_N": 128}),
-#     ],
-#     key=["N_CTX", "HEAD_DIM"]
-# )
+@triton.autotune(
+    configs=[
+        triton.Config({"BLOCK_M": 64, "BLOCK_N": 64}),
+        triton.Config({"BLOCK_M": 64, "BLOCK_N": 128}),
+        triton.Config({"BLOCK_M": 64, "BLOCK_N": 256}),
+        triton.Config({"BLOCK_M": 128, "BLOCK_N": 128}),
+    ],
+    key=["N_CTX", "HEAD_DIM"]
+)
 @triton.jit
 def _attn_fwd(Q, K, V, M, Out, sm_scale,  #
               stride_qz: tl.constexpr, stride_qh: tl.constexpr, stride_qm: tl.constexpr, stride_qk: tl.constexpr,  #
@@ -361,8 +360,8 @@ class _attention(torch.autograd.Function):
             o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
             q.shape[0], q.shape[1], N_CTX=q.shape[2],  # why varidic??
             HEAD_DIM=HEAD_DIM_K,  # 64
-            BLOCK_M = BM, # 32
-            BLOCK_N = BN, # 32
+            # BLOCK_M = BM, # 32
+            # BLOCK_N = BN, # 32
             STAGE=stage,
             debug=True,
             **extra_kern_args)
@@ -498,7 +497,7 @@ def extract_test_case_data(
             else:
                 print(f"警告: 过滤条件中的字段 '{key}' 在数据中不存在，跳过该过滤条件。")
     # 展示前10行数据
-    # print("Extracted test cases (head):\n", extracted_data.head(10))
+    print("Extracted test cases (head):\n", extracted_data.head(10))
     return extracted_data
 
 
@@ -559,20 +558,20 @@ def pytest_generate_tests(metafunc):
         filter_data = {
             "Layout": "BNSD",  # 只测试 BNSD 布局(4096)
         }
-        # # 提取测试数据
+        # 提取测试数据
         # test_data = extract_test_case_data(paths, extract_map, new_field, filter_data)
         # test_cases = [row[valid_fields].to_dict() for _, row in test_data.iterrows()]
-        # # 确保只对 test_case 参数化一次
+        # 确保只对 test_case 参数化一次
         # metafunc.parametrize("test_case", test_cases, ids=[f"{case['step']}_{case['Testcase Name']}" for case in test_cases])
 
         # 非测试文件的测试案例
         test_cases = [
-            [4, 32, 128, 128, False, torch.float16, 64, 128, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_1", 0],
-            [4, 32, 64, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_2", 0],
-            [1, 2, 1024, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_3", 0],
+            # [4, 32, 128, 128, False, torch.float16, 64, 128, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_1", 0],
+            # [4, 32, 64, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_2", 0],
+            # [1, 2, 1024, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_3", 0],
             [4, 32, 1024, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_4", 0],
-            [4, 32, 2048, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_5", 0],
-            [4, 32, 4096, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_6", 0],
+            # [4, 32, 2048, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_5", 0],
+            # [4, 32, 4096, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_6", 0],
             # [4, 32, 8192, 64, False, torch.float16, 32, 32, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_7", 0], # NPU out of memory. Tried to allocate 64.00 GiB
             # [4, 32, 16384, 64, False, torch.float16, 32, 32, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_8", 0], # NPU out of memory. Tried to allocate 64.00 GiB
 
@@ -586,7 +585,7 @@ def test_op_fwd(test_case:  Union[Dict[str, Any], List[Any]]):
         test_case = {k: v for k, v in zip(valid_fields, test_case)}
     # Z, H, N_CTX, HEAD_DIM, causal, dtype, BM, BN, step, group, test_name, sparse_mode = test_case
     Z, H, N_CTX, HEAD_DIM, causal, dtype, BM, BN, step, group, test_name, sparse_mode = [test_case[k] for k in valid_fields]
-    # print(f"\nRunning test case: {step}-{test_name} | Z={Z}, H={H}, N_CTX={N_CTX}, HEAD_DIM={HEAD_DIM}, causal={causal}, dtype={dtype}, BM={BM}, BN={BN}, sparse_mode={sparse_mode}")
+    print(f"\nRunning test case: {step}-{test_name} | Z={Z}, H={H}, N_CTX={N_CTX}, HEAD_DIM={HEAD_DIM}, causal={causal}, dtype={dtype}, BM={BM}, BN={BN}, sparse_mode={sparse_mode}")
     torch.manual_seed(20)
     # 创建输入张量 BNSD
     q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
@@ -614,7 +613,7 @@ def test_op_fwd(test_case:  Union[Dict[str, Any], List[Any]]):
             attention(q, k, v, causal, sm_scale, BM, BN)
 
         # 性能测试
-        kernel_avg_time = do_bench(profiling_forward_fn, keep_res=True)
+        kernel_avg_time = do_bench_npu(profiling_forward_fn, keep_res=True)
 
         test_results.append({
             "From": step,
@@ -651,11 +650,10 @@ def test_op_fwd(test_case:  Union[Dict[str, Any], List[Any]]):
             "Layout": "BNSD",
             "BM": BM,
             "BN": BN,
-            "causal": str(causal),
+            "causal": causal,
             "Precision result": "Error",
             "Error Message": str(e),
         })
-        print(f"Test case [{step}-{test_name}] failed with exception: {e}")
         pytest.fail(f"Test failed with exception [{step}-{test_name}]: {e}")
 
 
@@ -681,47 +679,6 @@ def collect_single(base_dir: str, key: str = None) -> float:
 
     return float('inf')
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean", keep_res=False):
-    """
-    Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
-    the 20-th and 80-th performance percentile.
-
-    :param fn: Function to benchmark
-    :type fn: Callable
-    :param warmup: Warmup time (in ms)
-    :type warmup: int
-    :param rep: Repetition time (in ms)
-    :type rep: int
-    :param grad_to_none: Reset the gradient of the provided tensor to None
-    :type grad_to_none: torch.tensor, optional
-    :param quantiles: Performance percentile to return in addition to the median.
-    :type quantiles: list[float], optional
-    :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all" Default is "mean".    :type return_mode: str
-    """
-    assert return_mode in ["min", "max", "mean", "median", "all"]
-    import torch
-
-    enable_bench_npu = os.getenv("TRITON_BENCH_METHOD", 'default').lower() in ('npu')
-    enable_bench_gpu = os.getenv("TRITON_BENCH_METHOD", 'default').lower() in ('gpu')
-    if enable_bench_npu:
-        avg_times = do_bench_npu(fn, warmup=max(5, warmup), active=max(30, rep), keep_res=keep_res)
-        return _summarize_statistics(torch.tensor([avg_times], dtype=torch.float), quantiles, return_mode)
-    elif enable_bench_gpu:
-        avg_times = do_bench_gpu(fn, warmup=max(5, warmup), active=max(30, rep))
-        return _summarize_statistics(torch.tensor([avg_times], dtype=torch.float), quantiles, return_mode)
-
-
-def _summarize_statistics(times, quantiles, return_mode):
-    import torch
-    if quantiles is not None:
-        ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
-        if len(ret) == 1:
-            ret = ret[0]
-        return ret
-    if return_mode == "all":
-        return times.tolist()
-    return getattr(torch, return_mode)(times).item()
-
 
 def do_bench_npu(fn, warmup=5, active=30, prof_dir=None, keep_res=False):
     import torch
@@ -735,7 +692,7 @@ def do_bench_npu(fn, warmup=5, active=30, prof_dir=None, keep_res=False):
         l2_cache=False,
         data_simplification=False
     )
-    skip_first = 10
+    skip_first = 1
     wait = 0
     repeat = 1
     total = skip_first + (wait + warmup + active) * repeat
@@ -777,40 +734,3 @@ def do_bench_npu(fn, warmup=5, active=30, prof_dir=None, keep_res=False):
             shutil.rmtree(torch_path)
 
     return time
-
-
-def do_bench_gpu(fn, warmup=5, active=30):
-    from datetime import datetime, timezone
-
-    skip_first = 10
-    wait = 0
-    repeat = 1
-    total = skip_first + (wait + warmup + active) * repeat
-    with torch.profiler.profile(
-        activities=[torch.profiler.ProfilerActivity.CUDA],
-        record_shapes=False,
-        profile_memory=False,
-        with_stack=False,
-        with_flops=False,
-        with_modules=False,
-    ) as prof:
-        torch.cuda.synchronize()
-        for i in range(total):
-            fn()
-            prof.step()
-        torch.cuda.synchronize()
-
-    times = parse_prof(prof)
-
-    return times
-
-
-def parse_prof(prof):
-    event_list = prof.events()
-    parsed_times = []
-
-    for evt in event_list:
-        if evt.device_type == torch.profiler.DeviceType.CUDA:
-            parsed_times.append(evt.device_time_total)
-    
-    return parsed_times

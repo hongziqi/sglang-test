@@ -558,25 +558,24 @@ def pytest_generate_tests(metafunc):
         filter_data = {
             "Layout": "BNSD",  # 只测试 BNSD 布局(4096)
         }
-        # # 提取测试数据
-        # test_data = extract_test_case_data(paths, extract_map, new_field, filter_data)
-        # test_cases = [row[valid_fields].to_dict() for _, row in test_data.iterrows()]
-        # # 确保只对 test_case 参数化一次
-        # metafunc.parametrize("test_case", test_cases, ids=[f"{case['step']}_{case['Testcase Name']}" for case in test_cases])
+        # 提取测试数据
+        test_data = extract_test_case_data(paths, extract_map, new_field, filter_data)
+        test_cases = [row[valid_fields].to_dict() for _, row in test_data.iterrows()]
+        # 确保只对 test_case 参数化一次
+        metafunc.parametrize("test_case", test_cases, ids=[f"{case['step']}_{case['Testcase Name']}" for case in test_cases])
 
         # 非测试文件的测试案例
-        test_cases = [
-            [4, 32, 128, 128, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_1", 0],
-            [4, 32, 64, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_2", 0],
-            [1, 2, 1024, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_3", 0],
-            [4, 32, 1024, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_4", 0],
-            [4, 32, 2048, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_5", 0],
-            [4, 32, 4096, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_6", 0],
-            # [4, 32, 8192, 64, False, torch.float16, 32, 32, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_7", 0], # CUDA out of memory. Tried to allocate 32.00 GiB. GPU 0 has a total capacity of 79.14 GiB of which 29.76 GiB is free.
-            # [4, 32, 16384, 64, False, torch.float16, 32, 32, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_8", 0], #  CUDA out of memory. Tried to allocate 64.00 GiB. GPU 0 has a total capacity of 79.14 GiB of which 11.89 GiB is free.
-
-        ]
-        metafunc.parametrize("test_case", test_cases, ids=[f"{case[8]}_{case[10]}" for case in test_cases])
+        # test_cases = [
+        #     [4, 32, 128, 128, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_1", 0], #BLOCK_M=64, BLOCK_N=128 ->  out of resource: shared memory, Required: 180224, Hardware limit: 166912. Reducing block sizes or `num_stages` may help.
+        #     [4, 32, 64, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_2", 0],
+        #     [1, 2, 1024, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_3", 0],
+        #     [4, 32, 1024, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_4", 0],
+        #     [4, 32, 2048, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_5", 0],
+        #     [4, 32, 4096, 64, False, torch.float16, 64, 64, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_6", 0],
+        #     [4, 32, 8192, 64, False, torch.float16, 32, 32, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_7", 0], # CUDA out of memory. Tried to allocate 32.00 GiB. GPU 0 has a total capacity of 79.14 GiB of which 29.76 GiB is free.
+        #     [4, 32, 16384, 64, False, torch.float16, 32, 32, "cv融合", "FlashAttentionScore", "FlashAttentionScore_BNSD_8", 0], #  CUDA out of memory. Tried to allocate 64.00 GiB. GPU 0 has a total capacity of 79.14 GiB of which 11.89 GiB is free.
+        # ]
+        # metafunc.parametrize("test_case", test_cases, ids=[f"{case[8]}_{case[10]}" for case in test_cases])
 
 
 def test_op_fwd(test_case:  Union[Dict[str, Any], List[Any]]):
@@ -629,9 +628,9 @@ def test_op_fwd(test_case:  Union[Dict[str, Any], List[Any]]):
             "BM": BM,
             "BN": BN,
             "causal": str(causal),
-            "Precision result": "Pass" if passed else "Fail",
-            **{f"Actual out {k}": v for k, v in errors.items()},
-            "Actual kernel time forward": kernel_avg_time,
+            "(gpu)Precision result": "Pass" if passed else "Fail",
+            **{f"(gpu)Actual out {k}": v for k, v in errors.items()},
+            "(gpu)Actual kernel time forward": kernel_avg_time,
         })
 
         assert passed, f"Test failed [{step}-{test_name}]| err_max={errors['err max']:.2e}, atol={atol}, rtol={rtol}"
@@ -650,9 +649,9 @@ def test_op_fwd(test_case:  Union[Dict[str, Any], List[Any]]):
             "Layout": "BNSD",
             "BM": BM,
             "BN": BN,
-            "causal": causal,
-            "Precision result": "Error",
-            "Error Message": str(e),
+            "causal": str(causal),
+            "(gpu)Precision result": "Error",
+            "(gpu)Error Message": str(e),
         })
         print(f"Test case [{step}-{test_name}] failed with exception: {e}")
         pytest.fail(f"Test failed with exception [{step}-{test_name}]: {e}")
@@ -734,7 +733,7 @@ def do_bench_npu(fn, warmup=5, active=30, prof_dir=None, keep_res=False):
         l2_cache=False,
         data_simplification=False
     )
-    skip_first = 10
+    skip_first = 1
     wait = 0
     repeat = 1
     total = skip_first + (wait + warmup + active) * repeat
