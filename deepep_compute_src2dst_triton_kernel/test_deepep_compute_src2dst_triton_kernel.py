@@ -105,9 +105,9 @@ def run_and_compare(path):
 
 if __name__ == "__main__":
     # 编译测试
-    path = "compute_src2dst_npu_output.pt"
+    path = "deepep_compute_src2dst_npu_output.pt"
     save_inputs_outputs(path)
 
     # 对比cuda和triton-ascend的输出
-    # path = "compute_src2dst_cuda_output.pt"
-    # run_and_compare(path)
+    path = "deepep_compute_src2dst_cuda_output.pt"
+    run_and_compare(path)
