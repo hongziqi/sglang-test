@@ -209,8 +209,8 @@ def run_and_compare_real_data_npu(
     except FileNotFoundError:
         print(f"File {src_path} or {expected_path} not found. Please run the test to generate it.")
         return
-    print(f"\n[REAL DATA INFO]")
-    print_data_info(data)
+    # print(f"\n[REAL DATA INFO]")
+    # print_data_info(data)
 
     # 将输入数据加载到 NPU
     for key, value in data.items():
