@@ -11,12 +11,11 @@ from utils import check_accuracy, run_and_compare_real_data_cuda, print_real_dat
 # 定义自动调优配置
 deepep_permute_triton_autotune = triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE': 64}),
-        triton.Config({'BLOCK_SIZE': 128}),
-        triton.Config({'BLOCK_SIZE': 256}),
         triton.Config({'BLOCK_SIZE': 512}),
         triton.Config({'BLOCK_SIZE': 1024}),
         triton.Config({'BLOCK_SIZE': 2048}),
+        triton.Config({'BLOCK_SIZE': 4096}),
+        triton.Config({'BLOCK_SIZE': 8192}),
     ],
     key=[],
 )
@@ -213,4 +212,15 @@ if __name__ == "__main__":
         key_mapping=key_mapping,
         save_output=True,   # 保存运行结果
         block_size=128,      # BLOCK_SIZE 设置
+    )
+
+    # 3.1 测试 autotune kernel 的性能
+    run_and_compare_real_data_cuda(
+        triton_kernel_impl=deepep_permute_impl,
+        src_path=src_path,
+        expected_path=expected_path,
+        key_mapping=key_mapping,
+        save_output=False,  # 不保存运行结果
+        autotune=True,  # 使用自动调优
+        profiling=True,  # 进行性能分析
     )

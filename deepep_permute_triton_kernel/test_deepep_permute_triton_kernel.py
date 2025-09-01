@@ -12,12 +12,14 @@ from utils import check_accuracy, run_and_compare_real_data_npu
 # 定义自动调优配置
 deepep_permute_triton_autotune = triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE': 64}),
-        triton.Config({'BLOCK_SIZE': 128}),
-        triton.Config({'BLOCK_SIZE': 256}),
+        # triton.Config({'BLOCK_SIZE': 64}),
+        # triton.Config({'BLOCK_SIZE': 128}),
+        # triton.Config({'BLOCK_SIZE': 256}),
         triton.Config({'BLOCK_SIZE': 512}),
         triton.Config({'BLOCK_SIZE': 1024}),
         triton.Config({'BLOCK_SIZE': 2048}),
+        triton.Config({'BLOCK_SIZE': 4096}),
+        triton.Config({'BLOCK_SIZE': 8192}),
     ],
     key=[],
     auto_profile_dir="/home/coder/.autotune",
@@ -185,13 +187,24 @@ if __name__ == "__main__":
     src_path = "deepep_permute_triton_kernel_debug_cuda0.pt"
     expected_path = "deepep_permute_triton_kernel_expected_cuda0.pt"
     expected_output = torch.load("OUTPUT_deepep_permute_triton_kernel_debug_cuda0.pt", map_location="cpu")
+    # 3.对比真实数据并检查精度
+    # run_and_compare_real_data_npu(
+    #     triton_kernel_impl=deepep_permute_impl,
+    #     src_path=src_path,
+    #     # expected_path=expected_path,
+    #     expected_output=expected_output,
+    #     key_mapping=key_mapping,
+    #     accuracy=True,  # 是否检查精度
+    #     accuracy_dict=accuracy_dict,
+    #     block_size=128,      # BLOCK_SIZE 设置
+    # )
+
+    # 4.1 测试 autotune kernel 的性能
     run_and_compare_real_data_npu(
         triton_kernel_impl=deepep_permute_impl,
         src_path=src_path,
-        # expected_path=expected_path,
-        expected_output=expected_output,
         key_mapping=key_mapping,
-        accuracy=True,  # 是否检查精度
-        accuracy_dict=accuracy_dict,
-        block_size=128,      # BLOCK_SIZE 设置
+        accuracy=False,  # 是否检查精度
+        autotune=True,  # 使用自动调优
+        profiling=True,  # 进行性能分析
     )
