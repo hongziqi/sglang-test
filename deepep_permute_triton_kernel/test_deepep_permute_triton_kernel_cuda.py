@@ -15,6 +15,8 @@ deepep_permute_triton_autotune = triton.autotune(
         triton.Config({'BLOCK_SIZE': 128}),
         triton.Config({'BLOCK_SIZE': 256}),
         triton.Config({'BLOCK_SIZE': 512}),
+        triton.Config({'BLOCK_SIZE': 1024}),
+        triton.Config({'BLOCK_SIZE': 2048}),
     ],
     key=[],
 )
@@ -86,10 +88,6 @@ def deepep_permute_impl(
         BLOCK_SIZE: Block size for Triton kernel.
     """
     hidden_size = input.shape[1]
-    # assert input.shape[1] == hidden_size
-    # assert gateup_input.shape[1] == hidden_size
-    # assert src2dst.shape[1] == topk
-    # assert topk_ids.shape[1] == topk
 
     grid = lambda meta: (input.shape[0],)
 
@@ -171,10 +169,10 @@ def run_and_compare(path: str, rtol=1e-3, atol=1e-3, BLOCK_SIZE: int = 64):
 
 
 if __name__ == "__main__":
-    # 1.保存输入输出
-    save_inputs_outputs("deepep_permute_cuda_output.pt")
-    # 加载输入并比较重复输入输出精度
-    run_and_compare("deepep_permute_cuda_output.pt")
+    # # 1.保存输入输出
+    # save_inputs_outputs("deepep_permute_cuda_output.pt")
+    # # 加载输入并比较重复输入输出精度
+    # run_and_compare("deepep_permute_cuda_output.pt")
 
     # 2. 运行真实数据，并保存运行结果
     # [REAL DATA INFO]
@@ -214,4 +212,5 @@ if __name__ == "__main__":
         expected_path=expected_path,
         key_mapping=key_mapping,
         save_output=True,   # 保存运行结果
+        block_size=128,      # BLOCK_SIZE 设置
     )

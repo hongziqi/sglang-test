@@ -180,8 +180,9 @@ def print_real_data(src_path: str):
 def run_and_compare_real_data_npu(
         triton_kernel_impl,  # Triton 内核实现函数
         src_path: str,
-        expected_path: str,
         key_mapping: dict,  # 数据文件参数名与内核参数名的映射
+        expected_path: str = None, # 期望输出数据路径
+        expected_output: torch.Tensor =None, # 期望输出数据（如果提供，则直接使用 expected_output 而不是expected_path）
         accuracy: bool = True,  # 是否检查精度
         accuracy_dict: List[str] = None,  # 精度检查的键列表
         autotune: bool = False,  # 是否自动调优
@@ -193,10 +194,11 @@ def run_and_compare_real_data_npu(
     通用的 Triton kernel 测试函数，适配多个内核。
     :param triton_kernel_impl: Triton 内核实现函数
     :param src_path: 输入数据路径
-    :param expected_path: 期望输出数据路径
     :param key_mapping: 数据文件参数名与内核参数名的映射 {内核参数： 数据文件参数名}
+    :param expected_path: 期望输出数据路径
+    :param expected_output: 期望输出数据（如果提供，则直接使用 expected_output 而不是expected_path）
     :param accuracy: 是否检查精度
-    :param accuracy_dict: 精度检查的键列表(内核参数)
+    :param accuracy_dict: 精度检查的键列表(内核参数)，和 expected_path/expected_output 一起使用
     :param autotune: 是否启用自动调优
     :param profiling: 是否进行性能分析
     :param USE_BLOCK_SIZE: 是否使用自定义 BLOCK_SIZE
@@ -205,9 +207,11 @@ def run_and_compare_real_data_npu(
     print(f"[DEBUG] KERLNEL NAME: {triton_kernel_impl.__name__}")
     try:
         data = torch.load(src_path, map_location=torch.device('cpu'))
-        expected_data = torch.load(expected_path, map_location=torch.device('cpu'))
     except FileNotFoundError:
         print(f"File {src_path} or {expected_path} not found. Please run the test to generate it.")
+        return
+    except Exception as e:
+        print(f"Error loading files: {e}")
         return
     print(f"\n[REAL DATA INFO]")
     print_data_info(data)
@@ -230,22 +234,36 @@ def run_and_compare_real_data_npu(
     # print("\n[Load Kernel Arguments]")
     # print_data_info(kernel_args)
 
+    if kernel_args.get("BLOCK_SIZE") is None and not autotune:
+        kernel_args['BLOCK_SIZE'] = block_size
+
     # 检查精度
     if accuracy:
         print(f"\n{'='*20} Checking accuracy start... {'='*20}")
-        if not accuracy_dict:
-            print(">>> No accuracy check keys provided, skipping accuracy check...")
-            print("Please provide accuracy_dict to enable accuracy checks.")
         print("\n>>> Running kernel for accuracy check...")
         triton_kernel_impl(**kernel_args)
         torch.npu.synchronize()
 
+        if expected_path is not None and expected_output is None:
+            expected_data = torch.load(expected_path, map_location=torch.device('cpu'))
+            if not accuracy_dict:
+                print(">>> No accuracy check keys provided, skipping accuracy check...")
+                print("Please provide accuracy_dict to enable accuracy checks.")
+        elif expected_output is not None:
+            expected_data = expected_output
+        else:
+            raise ValueError("Either expected_path or expected_output must be provided for accuracy check.")
+        
         for key in accuracy_dict:
             if key in kernel_args:
                 output_tensor = kernel_args[key]
-                expected_tensor = expected_data[key_mapping.get(key, key)].npu()
+                if expected_output is not None:
+                    expected_tensor = expected_data.npu()
+                else:
+                    expected_tensor = expected_data[key_mapping.get(key, key)].npu()
                 print(f">>> Checking accuracy for ({key}):")
                 check_accuracy(output_tensor, expected_tensor)
+
         print(f"{'='*20} Checking accuracy done. {'='*20}")
 
     # 自动调优测试
@@ -321,6 +339,9 @@ def run_and_compare_real_data_cuda(
     # 打印内核参数
     print("\n[Load Kernel Arguments]")
     print_data_info(kernel_args)
+
+    if kernel_args.get("BLOCK_SIZE") is None and not autotune:
+        kernel_args['BLOCK_SIZE'] = block_size
 
     if save_output:
         triton_kernel_impl(**kernel_args)

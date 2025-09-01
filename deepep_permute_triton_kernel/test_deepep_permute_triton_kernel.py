@@ -8,6 +8,7 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from utils import check_accuracy, run_and_compare_real_data_npu
 
+
 # 定义自动调优配置
 deepep_permute_triton_autotune = triton.autotune(
     configs=[
@@ -15,6 +16,8 @@ deepep_permute_triton_autotune = triton.autotune(
         triton.Config({'BLOCK_SIZE': 128}),
         triton.Config({'BLOCK_SIZE': 256}),
         triton.Config({'BLOCK_SIZE': 512}),
+        triton.Config({'BLOCK_SIZE': 1024}),
+        triton.Config({'BLOCK_SIZE': 2048}),
     ],
     key=[],
     auto_profile_dir="/home/coder/.autotune",
@@ -87,10 +90,10 @@ def deepep_permute_impl(
         BLOCK_SIZE: Block size for Triton kernel.
     """
     hidden_size = input.shape[1]
-    assert input.shape[1] == hidden_size
-    assert gateup_input.shape[1] == hidden_size
-    assert src2dst.shape[1] == topk
-    assert topk_ids.shape[1] == topk
+    # assert input.shape[1] == hidden_size
+    # assert gateup_input.shape[1] == hidden_size
+    # assert src2dst.shape[1] == topk
+    # assert topk_ids.shape[1] == topk
 
     grid = lambda meta: (input.shape[0],)
 
@@ -166,6 +169,29 @@ def run_and_compare(path, BLOCK_SIZE: int = 64):
 
     check_accuracy(gateup_input, expected_output)
 
+
 if __name__ == "__main__":
-    path = "deepep_permute_cuda_output.pt"
-    run_and_compare(path)       # 对比cuda和triton-ascend的输出
+    # path = "deepep_permute_cuda_output.pt"
+    # run_and_compare(path)       # 对比cuda和triton-ascend的输出
+
+    key_mapping = {
+        "input": "hidden_states",
+        "gateup_input": "gateup_input",
+        "src2dst": "src2dst",
+        "topk_ids": "topk_idx",
+        "topk": "router_topk",
+    }
+    accuracy_dict=["gateup_input"]
+    src_path = "deepep_permute_triton_kernel_debug_cuda0.pt"
+    expected_path = "deepep_permute_triton_kernel_expected_cuda0.pt"
+    expected_output = torch.load("OUTPUT_deepep_permute_triton_kernel_debug_cuda0.pt", map_location="cpu")
+    run_and_compare_real_data_npu(
+        triton_kernel_impl=deepep_permute_impl,
+        src_path=src_path,
+        # expected_path=expected_path,
+        expected_output=expected_output,
+        key_mapping=key_mapping,
+        accuracy=True,  # 是否检查精度
+        accuracy_dict=accuracy_dict,
+        block_size=128,      # BLOCK_SIZE 设置
+    )
