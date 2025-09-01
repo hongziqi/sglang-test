@@ -6,7 +6,22 @@ import triton.language as tl
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from utils import check_accuracy
+from utils import check_accuracy, run_and_compare_real_data_npu
+
+
+# 定义自动调优配置
+gelu_and_mul_triton_autotune = triton.autotune(
+    configs=[
+        triton.Config({'BLOCK_SIZE': 256}),
+        triton.Config({'BLOCK_SIZE': 512}),
+        triton.Config({'BLOCK_SIZE': 1024}),
+        triton.Config({'BLOCK_SIZE': 2048}),
+        triton.Config({'BLOCK_SIZE': 4096}),
+        # triton.Config({'BLOCK_SIZE': 8192}),
+    ],
+    key=[],
+    auto_profile_dir="/home/coder/.autotune",
+)
 
 @triton.jit
 def tanh(x):
@@ -73,27 +88,46 @@ def gelu_and_mul_triton_kernel(
             gelu_mul_output = gelu_mul_output.to(OutDtype)
             tl.store(down_input_ptr + offset, gelu_mul_output, mask=mask)
 
+
+gelu_and_mul_triton_kernel_autotuned = gelu_and_mul_triton_autotune(gelu_and_mul_triton_kernel)
+
+
 def gelu_and_mul_triton_launcher(
     gateup_output: torch.Tensor,     # shape: [token_num, hidden_size]
     down_input: torch.Tensor,        # shape: [token_num, hidden_size // 2]
     reorder_topk_ids: torch.Tensor,  # shape: [token_num], 每个 token 对应的 expert id
     scales: torch.Tensor | None,     # shape: [expert_range] 缩放因子
-    hidden_size: int,
     start_expert_id: int,
     end_expert_id: int,
+    hidden_size: int= None,
     BLOCK_SIZE: int = 64,
+    autotune: bool = False,  # 是否自动调优
 ):
+    if hidden_size is None:
+        hidden_size = gateup_output.shape[1]
+
     grid = (reorder_topk_ids.shape[0],)  # 每个 token 一个 program
-    gelu_and_mul_triton_kernel[grid](
-        gateup_output=gateup_output,
-        down_input=down_input,
-        hidden_size=hidden_size,
-        reorder_topk_ids=reorder_topk_ids,
-        scales=scales,
-        start_expert_id=start_expert_id,
-        end_expert_id=end_expert_id,
-        BLOCK_SIZE=BLOCK_SIZE,
-    )
+    if autotune:
+        gelu_and_mul_triton_kernel_autotuned[grid](
+            gateup_output=gateup_output,
+            down_input=down_input,
+            hidden_size=hidden_size,
+            reorder_topk_ids=reorder_topk_ids,
+            scales=scales,
+            start_expert_id=start_expert_id,
+            end_expert_id=end_expert_id,
+        )
+    else:
+        gelu_and_mul_triton_kernel[grid](
+            gateup_output=gateup_output,
+            down_input=down_input,
+            hidden_size=hidden_size,
+            reorder_topk_ids=reorder_topk_ids,
+            scales=scales,
+            start_expert_id=start_expert_id,
+            end_expert_id=end_expert_id,
+            BLOCK_SIZE=BLOCK_SIZE,
+        )
 
 
 def save_inputs_outputs(path: str, token_num: int = 8, hidden_size: int = 128, expert_total: int = 64, start_expert_id: int = 0, end_expert_id: int = 31, BLOCK_SIZE: int = 64):
@@ -165,11 +199,74 @@ def run_and_compare(path: str,BLOCK_SIZE: int = 64):
 
 
 if __name__ == "__main__":
+    # 1. 对比模拟数据并检查精度
     # path = "gelu_mul_cuda_output.pt"
-    path = "gelu_mul_float_cuda_output.pt"
-    run_and_compare(path)
+    # path = "gelu_mul_float_cuda_output.pt"
+    # run_and_compare(path)
     # >>> Compare Type: float16
     # 精度达标 (0/512, 0.000000% <= 0.100000%)
     # >>> Compare Type: float32
     # Max diff at [5, 0]: test=1.2373121976852417, ref=1.2373123168945312, abs=1.1920928955078125e-07, rel=9.634527486923616e-08
     # 精度达标 (0/512, 0.000000% <= 0.010000%)
+
+
+    # 2. 对比真实数据并检查精度
+    # [REAL DATA INFO]
+    # >> gateup_output:
+    # Shape: torch.Size([8, 4096])
+    # Dtype: torch.bfloat16
+    # Device: cpu
+    # First 10 elements: [0.9296875, 0.1162109375, 0.546875, -1.0859375, -0.10986328125, 0.5, 0.279296875, -0.0732421875, 0.1748046875, -0.4609375]
+    # >> down_input:
+    # Shape: torch.Size([8, 2048])
+    # Dtype: torch.bfloat16
+    # Device: cpu
+    # First 10 elements: [-0.37890625, 0.369140625, -0.23046875, -0.003173828125, 0.041259765625, 0.287109375, 0.083984375, 0.0, 0.09521484375, -0.12109375]
+    # >> reorder_topk_ids:
+    # Shape: torch.Size([8])
+    # Dtype: torch.int64
+    # Device: cpu
+    # First 10 elements: [19, 21, 103, 110, 184, 188, 240, 248]
+    # >> w2_input_scale: None
+    # >> start_expert_id: 160
+    # >> end_expert_id: 191 
+    key_mapping = {
+        "gateup_output": "gateup_output",
+        "down_input": "down_input",
+        "reorder_topk_ids": "reorder_topk_ids",
+        "scales": "w2_input_scale",
+        "start_expert_id": "start_expert_id",
+        "end_expert_id": "end_expert_id",
+    }
+    accuracy_dict = ["down_input"]
+    src_path = "gelu_and_mul_triton_kernel_debug_cuda0.pt"
+    expected_path = "gelu_and_mul_triton_kernel_expected_cuda0.pt"
+    expected_output = torch.load("OUTPUT_gelu_and_mul_triton_kernel_debug_cuda0.pt", map_location="cpu")
+    # 2.0 对比 expected_path 和 expected_output 的输出是否一致
+    # expected_path_data = torch.load(expected_path, map_location="cpu")["down_input"]
+    # check_accuracy(expected_path_data, expected_output)
+
+    # 2.1 对比真实数据并检查精度
+    run_and_compare_real_data_npu(
+        triton_kernel_impl=gelu_and_mul_triton_launcher,
+        src_path=src_path,
+        # expected_path=expected_path,
+        expected_output=expected_output,
+        key_mapping=key_mapping,
+        accuracy=True,  # 是否检查精度
+        accuracy_dict=accuracy_dict,
+        block_size=128,      # BLOCK_SIZE 设置
+    )
+    # >>> Compare Type: bfloat16
+    # Max diff at (tensor(4, device='npu:0'), tensor(129, device='npu:0')): test=-4.03125, ref=-4.0625, abs=0.03125, rel=0.0076904296875
+    # 精度达标 (31/16384, 0.189209% <= 0.500000%)
+
+    # 3.0 测试 autotune kernel 的性能(真实数据)
+    run_and_compare_real_data_npu(
+        triton_kernel_impl=gelu_and_mul_triton_launcher,
+        src_path=src_path,
+        key_mapping=key_mapping,
+        accuracy=False,  # 是否检查精度
+        autotune=True,  # 使用自动调优
+        profiling=True,  # 进行性能分析
+    )
