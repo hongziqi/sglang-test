@@ -187,17 +187,21 @@ if __name__ == "__main__":
     src_path = "deepep_permute_triton_kernel_debug_cuda0.pt"
     expected_path = "deepep_permute_triton_kernel_expected_cuda0.pt"
     expected_output = torch.load("OUTPUT_deepep_permute_triton_kernel_debug_cuda0.pt", map_location="cpu")
+    # 3.0 对比expected_path 和 expected_output 的输出是否一致
+    # expected_path_data = torch.load(expected_path, map_location="cpu")["gateup_input"]
+    # check_accuracy(expected_path_data, expected_output)
+
     # 3.对比真实数据并检查精度
-    # run_and_compare_real_data_npu(
-    #     triton_kernel_impl=deepep_permute_impl,
-    #     src_path=src_path,
-    #     # expected_path=expected_path,
-    #     expected_output=expected_output,
-    #     key_mapping=key_mapping,
-    #     accuracy=True,  # 是否检查精度
-    #     accuracy_dict=accuracy_dict,
-    #     block_size=128,      # BLOCK_SIZE 设置
-    # )
+    run_and_compare_real_data_npu(
+        triton_kernel_impl=deepep_permute_impl,
+        src_path=src_path,
+        # expected_path=expected_path,
+        expected_output=expected_output,
+        key_mapping=key_mapping,
+        accuracy=True,  # 是否检查精度
+        accuracy_dict=accuracy_dict,
+        block_size=128,      # BLOCK_SIZE 设置
+    )
 
     # 4.1 测试 autotune kernel 的性能
     run_and_compare_real_data_npu(
