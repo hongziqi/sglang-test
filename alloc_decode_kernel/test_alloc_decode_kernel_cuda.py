@@ -76,7 +76,6 @@ def alloc_decode_triton_launcher(
     ret_values,
     page_size,
     autotune: bool = False, # 是否自动调优
-    **kawargs,
 ):
     bs = len(seq_lens)
     grid = (bs,)
@@ -143,6 +142,7 @@ if __name__ == "__main__":
     }
     src_path = "88_alloc_decode_kernel_debug_cuda0.pt"
     expected_path = "88_alloc_decode_kernel_expected_cuda0.pt"
+    # 1. 运行真实数据，并保存运行结果
     run_and_compare_real_data_cuda(
         triton_kernel_impl=alloc_decode_triton_launcher,
         src_path=src_path,
@@ -157,7 +157,7 @@ if __name__ == "__main__":
         src_path=src_path,
         expected_path=expected_path,
         key_mapping=key_mapping,
-        save_output=False,   # 保存运行结果
+        save_output=True,   # 保存运行结果
         autotune=True,  # 使用自动调优
         profiling=True,  # 进行性能分析
     )

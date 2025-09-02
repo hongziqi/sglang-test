@@ -237,8 +237,10 @@ def run_and_compare_real_data_npu(
     # print("\n[Load Kernel Arguments]")
     # print_data_info(kernel_args)
 
-    if kernel_args.get("BLOCK_SIZE") is None and not autotune:
-        kernel_args['BLOCK_SIZE'] = block_size
+    # 使用自定义 BLOCK_SIZE
+    if USE_BLOCK_SIZE and not autotune:
+        kernel_args["BLOCK_SIZE"] = block_size
+        print(f"\n>>> Using custom BLOCK_SIZE: {block_size}")
 
     # 检查精度
     if accuracy:
@@ -274,11 +276,6 @@ def run_and_compare_real_data_npu(
         print(f"\n{'='*20} Test AutoTune First {'='*20}")
         triton_kernel_impl(**kernel_args)
         print(f"{'='*20} Test AutoTune Done {'='*20}")
-
-    # 使用自定义 BLOCK_SIZE
-    if USE_BLOCK_SIZE and not autotune and kernel_args.get("BLOCK_SIZE") is not None:
-        kernel_args["BLOCK_SIZE"] = block_size
-        print(f"\n>>> Using custom BLOCK_SIZE: {block_size}")
     
     # 性能分析
     if profiling:
@@ -343,8 +340,10 @@ def run_and_compare_real_data_cuda(
     # print("\n[Load Kernel Arguments]")
     # print_data_info(kernel_args)
 
-    if kernel_args.get("BLOCK_SIZE") is None and not autotune:
-        kernel_args['BLOCK_SIZE'] = block_size
+    # 使用自定义 BLOCK_SIZE
+    if USE_BLOCK_SIZE and not autotune:
+        kernel_args["BLOCK_SIZE"] = block_size
+        print(f"\n>>> Using custom BLOCK_SIZE: {block_size}")
 
     if save_output:
         triton_kernel_impl(**kernel_args)
@@ -360,15 +359,11 @@ def run_and_compare_real_data_cuda(
         triton_kernel_impl(**kernel_args)
         print(f"{'='*20} Test AutoTune Done {'='*20}")
     
-    # 使用自定义 BLOCK_SIZE
-    if USE_BLOCK_SIZE and not autotune and kernel_args.get("BLOCK_SIZE") is not None:
-        kernel_args["BLOCK_SIZE"] = block_size
-        print(f"\n>>> Using custom BLOCK_SIZE: {block_size}")
-    
     # 性能分析
     if profiling:
         # 按顺序提取参数值
         args = tuple(kernel_args[param] for param in param_order if param in kernel_args)
+        # print_data_info(kernel_args)
         print(f"\n{'='*20} Profiling the Triton kernel start, Autotune:{autotune} {'='*20}")
         profiling_test_cuda(
             triton_kernel_impl,

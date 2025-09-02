@@ -200,6 +200,7 @@ if __name__ == "__main__":
         key_mapping=key_mapping,
         accuracy=True,  # 是否检查精度
         accuracy_dict=accuracy_dict,
+        USE_BLOCK_SIZE=True, # 使用自定义block_size, 非autotune情况下生效
         block_size=128,      # BLOCK_SIZE 设置
     )
 

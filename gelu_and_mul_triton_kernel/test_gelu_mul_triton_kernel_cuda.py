@@ -240,6 +240,7 @@ if __name__ == "__main__":
         expected_path=expected_path,
         key_mapping=key_mapping,
         save_output=True,   # 保存运行结果
+        USE_BLOCK_SIZE=True, # 使用自定义block_size, 非autotune情况下生效
         block_size=128,      # BLOCK_SIZE 设置
     )
 
