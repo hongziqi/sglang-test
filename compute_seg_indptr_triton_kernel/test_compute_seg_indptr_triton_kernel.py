@@ -30,6 +30,7 @@ def compute_seg_indptr_impl(
     seg_indptr: torch.Tensor,        # (num_experts + 1,)
     num_toks: int,                   # Total number of tokens
     autotune: bool = False,  # 是否自动调优
+    **kwargs,
 ):
     if autotune:
         raise NotImplementedError("Autotune is not implemented for this kernel.")
@@ -111,23 +112,23 @@ if __name__ == "__main__":
     accuracy_dict = ["seg_indptr"]
     src_path = "seg_indptr_kernel_debug_cuda0.pt"
     expected_path = "seg_indptr_kernel_expected_cuda0.pt"
-    # run_and_compare_real_data_npu(
-    #     triton_kernel_impl=compute_seg_indptr_impl,
-    #     src_path=src_path,
-    #     expected_path=expected_path,
-    #     key_mapping=key_mapping,
-    #     accuracy=True,  # 是否检查精度
-    #     accuracy_dict=accuracy_dict,
-    # )
-    # >>> Compare Type: int
-    # 精度达标 (0/129, 0.000000% <= 0.000000%)
-
-    # 4. 测试 normal kernel 的性能
     run_and_compare_real_data_npu(
         triton_kernel_impl=compute_seg_indptr_impl,
         src_path=src_path,
         expected_path=expected_path,
         key_mapping=key_mapping,
-        accuracy=False,  # 是否检查精度
-        profiling=True,  # 是否进行性能分析
+        accuracy=True,  # 是否检查精度
+        accuracy_dict=accuracy_dict,
     )
+    # >>> Compare Type: int
+    # 精度达标 (0/129, 0.000000% <= 0.000000%)
+
+    # 4. 测试 normal kernel 的性能
+    # run_and_compare_real_data_npu(
+    #     triton_kernel_impl=compute_seg_indptr_impl,
+    #     src_path=src_path,
+    #     expected_path=expected_path,
+    #     key_mapping=key_mapping,
+    #     accuracy=False,  # 是否检查精度
+    #     profiling=True,  # 是否进行性能分析
+    # )

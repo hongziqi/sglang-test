@@ -82,6 +82,7 @@ def triton_per_token_group_quant_8bit_impl(
     num_warps: int,  # 每个线程块的 warp 数量
     num_stages: int,  # 每个线程块的阶段数
     autotune: bool = False,  # 是否自动调优
+    **kwargs,
 ):
     M, N = x.shape
     assert N % group_size == 0, "N must be divisible by group_size"

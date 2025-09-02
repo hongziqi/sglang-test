@@ -106,7 +106,7 @@ def gelu_and_mul_triton_launcher(
     if hidden_size is None:
         hidden_size = gateup_output.shape[1]
 
-    grid = (reorder_topk_ids.shape[0],)  # 每个 token 一个 program
+    grid = (gateup_output.shape[0],)  # 每个 token 一个 program
     if autotune:
         gelu_and_mul_triton_kernel_autotuned[grid](
             gateup_output=gateup_output,
@@ -262,11 +262,11 @@ if __name__ == "__main__":
     # 精度达标 (31/16384, 0.189209% <= 0.500000%)
 
     # 3.0 测试 autotune kernel 的性能(真实数据)
-    run_and_compare_real_data_npu(
-        triton_kernel_impl=gelu_and_mul_triton_launcher,
-        src_path=src_path,
-        key_mapping=key_mapping,
-        accuracy=False,  # 是否检查精度
-        autotune=True,  # 使用自动调优
-        profiling=True,  # 进行性能分析
-    )
+    # run_and_compare_real_data_npu(
+    #     triton_kernel_impl=gelu_and_mul_triton_launcher,
+    #     src_path=src_path,
+    #     key_mapping=key_mapping,
+    #     accuracy=False,  # 是否检查精度
+    #     autotune=True,  # 使用自动调优
+    #     profiling=True,  # 进行性能分析
+    # )
