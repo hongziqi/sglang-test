@@ -37,7 +37,6 @@ def alloc_decode_kernel(
 
     load_offset = tl.arange(0, bs_upper)
     seq_lens = tl.load(seq_lens_ptr + load_offset, mask=load_offset <= pid)
-    # seq_lens = tl.load(seq_lens_ptr + load_offset, mask=load_offset < pid+1)
     pre_lens = tl.where(load_offset <= pid, seq_lens - 1, seq_lens)
 
     seq_len = tl.load(seq_lens_ptr + pid)
@@ -78,7 +77,6 @@ def alloc_decode_triton_launcher(
     ret_values,
     page_size,
     autotune: bool = False, # 是否自动调优
-    **kawargs,
 ):
     bs = len(seq_lens)
     grid = (bs,)
@@ -146,6 +144,7 @@ if __name__ == "__main__":
         "page_size": "page_size",
     }
     accuracy_dict = ["out_indices", "ret_values"]
+    # 1. 对比真实数据并检查精度
     run_and_compare_real_data_npu(
         triton_kernel_impl=alloc_decode_triton_launcher,
         src_path=src_path,
@@ -153,4 +152,15 @@ if __name__ == "__main__":
         key_mapping=key_mapping,
         accuracy=True,  # 是否检查精度
         accuracy_dict=accuracy_dict,
+    )
+
+    # 2.0 测试 autotune kernel 的性能(真实数据)
+    run_and_compare_real_data_npu(
+        triton_kernel_impl=alloc_decode_triton_launcher,
+        src_path=src_path,
+        expected_path=expected_path,
+        key_mapping=key_mapping,
+        accuracy=False,  # 是否检查精度
+        autotune=True,  # 使用自动调优
+        profiling=True,  # 进行性能分析
     )

@@ -1,7 +1,12 @@
 ## NPU
 ### AUTOTUNE
+page_size: 8, avg time: 1.999us
 
+Triton autotuning for function alloc_decode_kernel finished after 156.16s; best config selected: page_size: 8, num_warps: 4, num_ctas: 1, num_stages: 2, num_buffers_warp_spec: 0, num_consumer_groups: 0, reg_dec_producer: 0, reg_inc_consumer: 0, maxnreg: None, multibuffer: None, enable_hivm_auto_cv_balance: None, unit_flag: None, limit_auto_multi_buffer_only_for_local_buffer:             None, limit_auto_multi_buffer_of_local_buffer: None, nested_sub_block_num: None, set_workspace_multibuffer: None, nested_vector_loop_num: None, nested_cube_loop_num: None;
 
+>> op_statistic.csv
+OP Type,Core Type,Count,Total Time(us),Min Time(us),Avg Time(us),Max Time(us),Ratio(%)
+alloc_decode_kernel,AI_VECTOR_CORE,30,59.962,1.86,1.999,2.12,100
 
 ## GPU
 ### AUTOTUNE
@@ -34,4 +39,4 @@ Self CUDA time total: 45.632us
 
 | 算子名称                 | GPU描述:耗时 | NPU描述:耗时 | 比例 | autotune描述:GPU耗时 | autotune描述:NPU耗时  | autotune比例 |
 | -------------------- | ----- | ----- | ----- | ----- | --- | ---------- | 
-| alloc_decode_kernel | -:- |   -:-    | - | 512:1.521us |  |  |
+| alloc_decode_kernel | -:- |   -:-    | - | 512:1.521us | 8:1.999us | 76.08% |

@@ -35,7 +35,6 @@ def alloc_decode_kernel(
 
     load_offset = tl.arange(0, bs_upper)
     seq_lens = tl.load(seq_lens_ptr + load_offset, mask=load_offset <= pid)
-    # seq_lens = tl.load(seq_lens_ptr + load_offset, mask=load_offset < pid+1)
     pre_lens = tl.where(load_offset <= pid, seq_lens - 1, seq_lens)
 
     seq_len = tl.load(seq_lens_ptr + pid)
