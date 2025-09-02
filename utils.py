@@ -11,13 +11,16 @@ def check_accuracy(output: torch.Tensor, expected: torch.Tensor):
     dtype = expected.dtype
     if dtype == torch.float16:
         print(">>> Compare Type: float16")
-        rtol, atol, max_fail_ratio = 1e-3, 1e-3, 1e-3  # 双千分之一
+        rtol, atol, max_fail_ratio = 1e-3, 1e-3, 0  # 双千分之一
     elif dtype == torch.bfloat16:
         print(">>> Compare Type: bfloat16")
-        rtol, atol, max_fail_ratio = 5e-3, 5e-3, 5e-3  # 双千分之五
+        rtol, atol, max_fail_ratio = 1e-3, 1e-3, 0  # 双千分之一
+        # 为了更准确地比较 bfloat16，转换为 float32
+        output = output.to(torch.float32)
+        expected = expected.to(torch.float32)
     elif dtype == torch.float32:
         print(">>> Compare Type: float32")
-        rtol, atol, max_fail_ratio = 1e-4, 1e-4, 1e-4  # 双万分之一
+        rtol, atol, max_fail_ratio = 1e-4, 1e-4, 0  # 双万分之一
     elif dtype in [torch.int8, torch.uint8, torch.int32, torch.uint32, torch.int64, torch.uint64]:
         print(">>> Compare Type: int")
         rtol, atol, max_fail_ratio = 0, 0, 0  # 整数类型不允许误差
@@ -44,9 +47,9 @@ def check_accuracy(output: torch.Tensor, expected: torch.Tensor):
 
     # 判断是否精度达标
     if fail_ratio <= max_fail_ratio:
-        print(f"精度达标 ({fail}/{total}, {fail_ratio:.6%} <= {max_fail_ratio:.6%})")
+        print(f"精度达标 (Mismatched elements:{fail}/{total}, {fail_ratio:.6%} <= {max_fail_ratio:.6%})")
     else:
-        print(f"精度不达标 ({fail}/{total}, {fail_ratio:.6%} > {max_fail_ratio:.6%})")
+        print(f"精度不达标 (Mismatched elements:{fail}/{total}, {fail_ratio:.6%} > {max_fail_ratio:.6%})")
         idx_list = torch.nonzero(fail_mask)[:10]  # 获取前10个失败点
         for idx in idx_list.tolist():
             idx_tuple = tuple(idx)  # 转换为多维索引
@@ -337,8 +340,8 @@ def run_and_compare_real_data_cuda(
     }
     kernel_args["autotune"] = autotune  # 添加 autotune 参数
     # 打印内核参数
-    print("\n[Load Kernel Arguments]")
-    print_data_info(kernel_args)
+    # print("\n[Load Kernel Arguments]")
+    # print_data_info(kernel_args)
 
     if kernel_args.get("BLOCK_SIZE") is None and not autotune:
         kernel_args['BLOCK_SIZE'] = block_size
