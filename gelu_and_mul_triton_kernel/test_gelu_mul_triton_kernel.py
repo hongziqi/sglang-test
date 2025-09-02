@@ -259,8 +259,8 @@ if __name__ == "__main__":
         block_size=128,      # BLOCK_SIZE 设置
     )
     # >>> Compare Type: bfloat16
-    # Max diff at (tensor(4, device='npu:0'), tensor(129, device='npu:0')): test=-4.03125, ref=-4.0625, abs=0.03125, rel=0.0076904296875
-    # 精度达标 (31/16384, 0.189209% <= 0.500000%)
+    # Max diff at (tensor(4, device='npu:0'), tensor(129, device='npu:0')): test=-4.03125, ref=-4.0625, abs=0.03125, rel=0.007692305836826563
+    # 精度不达标 (Mismatched elements:331/16384, 2.020264% > 0.000000%)
 
     # 3.0 测试 autotune kernel 的性能(真实数据)
     # run_and_compare_real_data_npu(
