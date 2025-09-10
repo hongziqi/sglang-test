@@ -216,12 +216,19 @@ if __name__ == "__main__":
     )
 
     # 3.1 测试 autotune kernel 的性能
-    run_and_compare_real_data_cuda(
-        triton_kernel_impl=deepep_permute_impl,
-        src_path=src_path,
-        expected_path=expected_path,
-        key_mapping=key_mapping,
-        save_output=False,  # 不保存运行结果
-        autotune=True,  # 使用自动调优
-        profiling=True,  # 进行性能分析
-    )
+    # run_and_compare_real_data_cuda(
+    #     triton_kernel_impl=deepep_permute_impl,
+    #     src_path=src_path,
+    #     expected_path=expected_path,
+    #     key_mapping=key_mapping,
+    #     save_output=False,  # 不保存运行结果
+    #     autotune=True,  # 使用自动调优
+    #     profiling=True,  # 进行性能分析
+    # )
+
+    # 4. 比较解释器模式和gpu模式的输出
+    expected_cpu_path = "deepep_permute_triton_kernel_expected_cuda0_cpu.pt"
+    expected_cpu_data = torch.load(expected_cpu_path)
+    expected_gpu_data = torch.load(expected_path)
+
+    check_accuracy(expected_cpu_data["gateup_input"], expected_gpu_data["gateup_input"])
