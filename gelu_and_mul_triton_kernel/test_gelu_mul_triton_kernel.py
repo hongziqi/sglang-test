@@ -6,7 +6,7 @@ import triton.language as tl
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from utils import check_accuracy, run_and_compare_real_data_npu
+from utils import check_accuracy, run_and_compare_real_data_npu, benchmark_compare_close
 
 
 # 定义自动调优配置
@@ -198,6 +198,35 @@ def run_and_compare(path: str,BLOCK_SIZE: int = 64):
     fail_ratio = check_accuracy(down_input, expected_output)
 
 
+def run_and_save(path: str):
+    data = torch.load(path, map_location="cpu")
+    # # 升 fp32 计算结果
+    # down_input = data["down_input"].to("npu").to(torch.float32)
+    # gateup_output = data["gateup_output"].to("npu").to(torch.float32)
+    # 原始 fp16 计算结果
+    down_input = data["down_input"].to("npu")
+    gateup_output = data["gateup_output"].to("npu")
+    reorder_topk_ids = data["reorder_topk_ids"].to("npu")
+    scales = data["w2_input_scale"]
+    start_expert_id = data["start_expert_id"]
+    end_expert_id = data["end_expert_id"]
+
+    # 重新计算输出
+    gelu_and_mul_triton_launcher(
+        gateup_output=gateup_output,
+        down_input=down_input,
+        reorder_topk_ids=reorder_topk_ids,
+        scales=scales,
+        start_expert_id=start_expert_id,
+        end_expert_id=end_expert_id,
+        BLOCK_SIZE=128,
+    )
+    print(">> down_input:", down_input)
+    print(">> down_input dtype:", down_input.dtype)
+    # torch.save(down_input.cpu(), "OUTPUT_gelu_and_mul_triton_kernel_debug_npu_fp32.pt")
+    torch.save(down_input.cpu(), "OUTPUT_gelu_and_mul_triton_kernel_debug_npu_fp16.pt")
+
+
 if __name__ == "__main__":
     # 1. 对比模拟数据并检查精度
     # path = "gelu_mul_cuda_output.pt"
@@ -247,17 +276,17 @@ if __name__ == "__main__":
     # check_accuracy(expected_path_data, expected_output)
 
     # 2.1 对比真实数据并检查精度
-    run_and_compare_real_data_npu(
-        triton_kernel_impl=gelu_and_mul_triton_launcher,
-        src_path=src_path,
-        # expected_path=expected_path,
-        expected_output=expected_output,
-        key_mapping=key_mapping,
-        accuracy=True,  # 是否检查精度
-        accuracy_dict=accuracy_dict,
-        USE_BLOCK_SIZE=True, # 使用自定义block_size, 非autotune情况下生效
-        block_size=128,      # BLOCK_SIZE 设置
-    )
+    # run_and_compare_real_data_npu(
+    #     triton_kernel_impl=gelu_and_mul_triton_launcher,
+    #     src_path=src_path,
+    #     # expected_path=expected_path,
+    #     expected_output=expected_output,
+    #     key_mapping=key_mapping,
+    #     accuracy=True,  # 是否检查精度
+    #     accuracy_dict=accuracy_dict,
+    #     USE_BLOCK_SIZE=True, # 使用自定义block_size, 非autotune情况下生效
+    #     block_size=128,      # BLOCK_SIZE 设置
+    # )
     # >>> Compare Type: bfloat16
     # Max diff at (tensor(4, device='npu:0'), tensor(129, device='npu:0')): test=-4.03125, ref=-4.0625, abs=0.03125, rel=0.007692305836826563
     # 精度不达标 (Mismatched elements:331/16384, 2.020264% > 0.000000%)
@@ -271,3 +300,17 @@ if __name__ == "__main__":
     #     autotune=True,  # 使用自动调优
     #     profiling=True,  # 进行性能分析
     # )
+    # 4.0 三方精度对比
+    # run_and_save(src_path)
+    # NPU 升fp32 计算结果
+    gold_tensor = torch.load("OUTPUT_gelu_and_mul_triton_kernel_debug_npu_fp32.pt", map_location="cpu")
+    # NPU 原始fp16 计算结果
+    act_tensor = torch.load("OUTPUT_gelu_and_mul_triton_kernel_debug_npu_fp16.pt", map_location="cpu")
+    # GPU 原始fp16 计算结果
+    std_tensor = torch.load("OUTPUT_gelu_and_mul_triton_kernel_debug_cuda0.pt", map_location="cpu")
+    benchmark_compare_close(gold_tensor, act_tensor, std_tensor)
+    # 测试结果如下:
+    # act_re.max = 0.003834982169792056, std_re.max = 0.007187623996287584, limit ration = 10
+    # act_re.sum = 5.553172588348389, std_re.sum = 7.714958190917969, limit ration = 2
+    # act_small_error_ratio = 0.0, std_small_error_ratio = 0.0, limit ration = 2
+    # act_rmse = 0.003285513259470463, std_rmse = 0.004117380827665329, limit ration = 2
