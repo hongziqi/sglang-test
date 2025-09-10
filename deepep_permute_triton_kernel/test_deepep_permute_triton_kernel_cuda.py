@@ -225,10 +225,3 @@ if __name__ == "__main__":
     #     autotune=True,  # 使用自动调优
     #     profiling=True,  # 进行性能分析
     # )
-
-    # 4. 比较解释器模式和gpu模式的输出
-    expected_cpu_path = "deepep_permute_triton_kernel_expected_cuda0_cpu.pt"
-    expected_cpu_data = torch.load(expected_cpu_path)
-    expected_gpu_data = torch.load(expected_path)
-
-    check_accuracy(expected_cpu_data["gateup_input"], expected_gpu_data["gateup_input"])

@@ -4,6 +4,28 @@ import inspect
 from typing import List
 
 
+eval_standard = {
+    torch.float32: {
+        "rtol": 1e-6,
+        "small_value": 1e-6,
+        "small_value_atol": 1e-9,
+        "etol": 1e-4,
+    },
+    torch.float16: {
+        "rtol": 1e-3,
+        "small_value": 1e-3,
+        "small_value_atol": 1e-5,
+        "etol": 1e-3,
+    },
+    torch.bfloat16: {
+        "rtol": 4e-3,
+        "small_value": 1e-3,
+        "small_value_atol": 1e-5,
+        "etol": 1e-3,
+    },
+}
+
+
 def check_accuracy(output: torch.Tensor, expected: torch.Tensor):
     assert output.shape == expected.shape, f"Shape mismatch: {output.shape} vs {expected.shape}"
     
@@ -370,3 +392,68 @@ def run_and_compare_real_data_cuda(
             args=args,
         )
         print(f"{'='*20} Profiling the Triton kernel done, Autotune:{autotune} {'='*20}")
+
+
+def benchmark_compare_close(gold: torch.Tensor, act: torch.Tensor, std: torch.Tensor):
+    """
+    gold: NPU 升fp32结果
+    act: NPU 结果
+    std: GPU 结果
+    """
+    assert gold.shape == act.shape == std.shape, "Shape mismatch"
+    if act.dtype == torch.bfloat16 or act.dtype == torch.float32 or act.dtype == torch.float16:
+        assert gold.dtype == torch.float32, "Gold must be float32"
+        assert not (torch.isnan(act).any() or torch.isinf(act).any()), "actual Tensor can not have nan or inf"
+    
+    gold = gold.cpu()
+    act = act.cpu()
+    std = std.cpu()
+
+    eps = eval_standard[act.dtype]["small_value"]
+    atol = eval_standard[act.dtype]["small_value_atol"]
+
+    mask = torch.abs(gold) <= eps
+    small_count = mask.sum().item()
+
+    def calculate_relative_errors_except_small(tensor):
+        re = torch.abs(gold - tensor) / torch.abs(gold)
+        return torch.where(mask, 0, re)
+    
+    act_re = calculate_relative_errors_except_small(act)
+    std_re = calculate_relative_errors_except_small(std)
+    act_ae = torch.abs(gold - act)
+    std_ae = torch.abs(gold - std)
+
+    act_small_error_count = (mask & (act_ae > atol)).sum().item()
+    std_small_error_count = (mask & (std_ae > atol)).sum().item()
+    act_total = act.numel()
+    std_total = std.numel()
+
+    act_small_error_ratio = act_small_error_count / act_total
+    std_small_error_ratio = std_small_error_count / std_total
+
+    def calculate_rmse(tensor):
+        dlt2 = (tensor - gold) ** 2
+        dlt2_except_small_mean = torch.where(mask, 0, dlt2).sum() / small_count
+        return torch.sqrt(dlt2_except_small_mean)
+    
+    act_rmse = calculate_rmse(act)
+    std_rmse = calculate_rmse(std)
+
+    print(f"act_re.max = {act_re.max()}, std_re.max = {std_re.max()}, limit ration = 10")
+    print(f"act_re.sum = {act_re.sum()}, std_re.sum = {std_re.sum()}, limit ration = 2")
+
+    print(
+        f"act_small_error_ratio = {act_small_error_ratio}, std_small_error_ratio = {std_small_error_ratio}, limit ration = 2"
+    )
+    print(f"act_rmse = {act_rmse}, std_rmse = {std_rmse}, limit ration = 2")
+
+    assert act_re.max() <= 10 * std_re.max(), "actual re max > standard re max's 10 times"
+
+    assert act_re.sum() <= 2 * std_re.sum(), "actual re sum > standard re sum's 2 times"
+
+    assert act_small_error_ratio <= 2 * std_small_error_ratio, "actual small error ratio > standard small error ratio's 2 times"
+
+    assert act_rmse <= 2 * std_rmse, "actual rmse > standard rmse's 2 times"
+
+    return False

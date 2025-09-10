@@ -44,7 +44,7 @@ def deepep_permute_triton_kernel(
 
     # Compute pointers for src2dst and topk_ids
     src2dst_ptr = src2dst_ptr + src_idx * topk
-    topk_ids_ptr = topk_ids_ptr + src_idx * topk
+    topk_ids_ptr = topk_ids_ptr + src_idx * topk # 无使用
 
     # Compute pointer for the source data
     src_ptr = input_ptr + src_idx * hidden_size
@@ -98,6 +98,7 @@ def deepep_permute_impl(
     # assert topk_ids.shape[1] == topk
 
     grid = lambda meta: (input.shape[0],)
+    # grid = (1,)
 
     if autotune:
         deepep_permute_triton_kernel_autotuned[grid](
@@ -174,7 +175,7 @@ def run_and_compare(path, BLOCK_SIZE: int = 64):
 
 if __name__ == "__main__":
     # path = "deepep_permute_cuda_output.pt"
-    # run_and_compare(path)       # 对比cuda和triton-ascend的输出
+    # run_and_compare(path)       # （测试数据）对比cuda和triton-ascend的输出
 
     key_mapping = {
         "input": "hidden_states",
@@ -186,17 +187,34 @@ if __name__ == "__main__":
     accuracy_dict=["gateup_input"]
     src_path = "deepep_permute_triton_kernel_debug_cuda0.pt"
     expected_path = "deepep_permute_triton_kernel_expected_cuda0.pt"
-    expected_output = torch.load("OUTPUT_deepep_permute_triton_kernel_debug_cuda0.pt", map_location="cpu")
-    # 3.0 对比expected_path 和 expected_output 的输出是否一致
-    # expected_path_data = torch.load(expected_path, map_location="cpu")["gateup_input"]
-    # check_accuracy(expected_path_data, expected_output)
+    # [REAL DATA INFO]
+    # >> hidden_states:
+    # Shape: torch.Size([6923, 7168])
+    # Dtype: torch.bfloat16
+    # Device: cpu
+    # First 10 elements: [-0.2578125, -0.1298828125, 0.26953125, -0.40234375, 0.2099609375, -0.099609375, 0.026123046875, 0.10205078125, -0.345703125, -0.01611328125]
+    # >> gateup_input:
+    # Shape: torch.Size([17393, 7168])
+    # Dtype: torch.bfloat16
+    # Device: cpu
+    # First 10 elements: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    # >> src2dst:
+    # Shape: torch.Size([55384])
+    # Dtype: torch.int64
+    # Device: cpu
+    # First 10 elements: [-37991, -37990, -37989, -37988, -37987, -37986, 10590, -37985, -37984, -37983]
+    # >> topk_idx:
+    # Shape: torch.Size([6923, 8])
+    # Dtype: torch.int64
+    # Device: cpu
+    # First 10 elements: [-1, -1, -1, -1, -1, -1, 20, -1, -1, -1]
+    # >> router_topk: 8
 
     # 3.对比真实数据并检查精度
     run_and_compare_real_data_npu(
         triton_kernel_impl=deepep_permute_impl,
         src_path=src_path,
-        # expected_path=expected_path,
-        expected_output=expected_output,
+        expected_path=expected_path,
         key_mapping=key_mapping,
         accuracy=True,  # 是否检查精度
         accuracy_dict=accuracy_dict,
@@ -205,11 +223,11 @@ if __name__ == "__main__":
     )
 
     # 4.1 测试 autotune kernel 的性能
-    run_and_compare_real_data_npu(
-        triton_kernel_impl=deepep_permute_impl,
-        src_path=src_path,
-        key_mapping=key_mapping,
-        accuracy=False,  # 是否检查精度
-        autotune=True,  # 使用自动调优
-        profiling=True,  # 进行性能分析
-    )
+    # run_and_compare_real_data_npu(
+    #     triton_kernel_impl=deepep_permute_impl,
+    #     src_path=src_path,
+    #     key_mapping=key_mapping,
+    #     accuracy=False,  # 是否检查精度
+    #     autotune=True,  # 使用自动调优
+    #     profiling=True,  # 进行性能分析
+    # )
