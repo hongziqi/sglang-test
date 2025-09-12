@@ -57,6 +57,7 @@ def moe_align_block_size_stage4_impl(
     numel = topk_ids.numel()
     grid = (num_experts,)
     tokens_per_thread = ceil_div(numel, num_experts)
+    print(f">> numel: {numel}, num_experts: {num_experts}, tokens_per_thread: {tokens_per_thread}")
 
     moe_align_block_size_stage4[grid](
         topk_ids,
@@ -69,7 +70,7 @@ def moe_align_block_size_stage4_impl(
         numel,
         tokens_per_thread,
     )
-
+    torch.cuda.synchronize()
 
 
 def save_inputs_outputs(path):
@@ -144,7 +145,7 @@ def run_and_compare(path):
 
 
 if __name__ == "__main__":
-    path = "moe_align_block_size_stage4_cuda_debug_output.pt"
+    path = "moe_align_block_size_stage4_cuda_output.pt"
     save_inputs_outputs(path)
 
     run_and_compare(path)

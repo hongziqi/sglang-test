@@ -70,24 +70,26 @@ def moe_align_block_size_stage4_impl(
         numel,
         tokens_per_thread,
     )
-    return sorted_token_ids, expert_ids, tokens_cnts
+    torch.npu.synchronize()
 
 
-def run_and_compare(path):
-    data = torch.load(path, map_location='cpu')
-    topk_ids = data["topk_ids"].npu()
-    sorted_token_ids = torch.empty_like(data["sorted_token_ids"]).npu()
-    expert_ids = torch.empty_like(data["expert_ids"]).npu()
-    tokens_cnts = torch.empty_like(data["tokens_cnts"]).npu()
-    cumsum = data["cumsum"].npu()
-    num_experts = data["num_experts"]
-    block_size = data["block_size"]
+def run_and_compare():
+    # 构造极简测试数据
+    num_experts = 2
+    block_size = 2
+    numel = 4  # 4个token
 
-    expected_sorted_token_ids = data["sorted_token_ids"]
-    expected_expert_ids = data["expert_ids"]
-    expected_tokens_cnts = data["tokens_cnts"]
+    # 每个token分配的expert ID（前2个给expert 0，后2个给expert 1）
+    topk_ids = torch.tensor([0, 0, 1, 1], dtype=torch.int32).npu()
+    sorted_token_ids = torch.empty_like(topk_ids).npu()  # expected: [0, 1, 2, 3]
+    expert_ids = torch.empty((ceil_div(numel, block_size),), dtype=torch.int32).npu()  # expected: [0, 1]
+    # tokens_cnts初始值（全0），形状[num_experts+1, num_experts] = [3, 2]
+    tokens_cnts = torch.zeros((3, 2), dtype=torch.int32).npu()  # expected: [[2,0],[0,2],[0,0]]
+    print(">> tokens_cnts initial:", tokens_cnts)
+    # cumsum：每个expert的token起始位置（前缀和）
+    cumsum = torch.tensor([0, 2, 4], dtype=torch.int32).npu()
 
-    sorted_token_ids, expert_ids, tokens_cnts = moe_align_block_size_stage4_impl(
+    moe_align_block_size_stage4_impl(
         topk_ids,
         sorted_token_ids,
         expert_ids,
@@ -98,17 +100,40 @@ def run_and_compare(path):
     )
 
     print(">> 1.sorted_token_ids:", sorted_token_ids.cpu())
-    print(">> 1.expected_sorted_token_ids:", expected_sorted_token_ids.cpu())
-    check_accuracy(sorted_token_ids.cpu(), expected_sorted_token_ids.cpu())
+    print(">> 1.expected_sorted_token_ids:", torch.tensor([0, 1, 2, 3], dtype=torch.int32))
+    check_accuracy(sorted_token_ids.cpu(), torch.tensor([0, 1, 2, 3], dtype=torch.int32))
     print(">> 2.expert_ids:", expert_ids.cpu())
-    print(">> 2.expected_expert_ids:", expected_expert_ids.cpu())
-    check_accuracy(expert_ids.cpu(), expected_expert_ids.cpu())
+    print(">> 2.expected_expert_ids:", torch.tensor([0, 1], dtype=torch.int32))
+    check_accuracy(expert_ids.cpu(), torch.tensor([0, 1], dtype=torch.int32))
     print(">> 3.tokens_cnts:", tokens_cnts.cpu())
-    print(">> 3.expected_tokens_cnts:", expected_tokens_cnts.cpu())
-    check_accuracy(tokens_cnts.cpu(), expected_tokens_cnts.cpu())
+    print(">> 3.expected_tokens_cnts:", torch.tensor([[2,0],[0,2],[0,0]], dtype=torch.int32))
+    check_accuracy(tokens_cnts.cpu(), torch.tensor([[2,0],[0,2],[0,0]], dtype=torch.int32))
 
 
 if __name__ == "__main__":
     # 1.模拟数据测试 NPU 和 GPU 结果是否一致
-    path = "moe_align_block_size_stage4_cuda_output.pt"
-    run_and_compare(path)
+    run_and_compare()
+    # >> 1.sorted_token_ids: tensor([1, 0, 3, 0], dtype=torch.int32)
+    # >> 1.expected_sorted_token_ids: tensor([0, 1, 2, 3], dtype=torch.int32)
+    # >>> Compare Type: int
+    # Max diff at (tensor(3),): test=0, ref=3, abs=3, rel=0.9999997019767761
+    # 精度不达标 (Mismatched elements:4/4, 100.000000% > 0.000000%)
+    # (0,): test=1.000000, ref=0.000000, diff=1.000000, rel=1000000.000000
+    # (1,): test=0.000000, ref=1.000000, diff=1.000000, rel=0.999999
+    # (2,): test=3.000000, ref=2.000000, diff=1.000000, rel=0.500000
+    # (3,): test=0.000000, ref=3.000000, diff=3.000000, rel=1.000000
+    # >> 2.expert_ids: tensor([0, 1], dtype=torch.int32)
+    # >> 2.expected_expert_ids: tensor([0, 1], dtype=torch.int32)
+    # >>> Compare Type: int
+    # 精度达标 (Mismatched elements:0/2, 0.000000% <= 0.000000%)
+    # >> 3.tokens_cnts: tensor([[1, 0],
+    #         [0, 1],
+    #         [0, 0]], dtype=torch.int32)
+    # >> 3.expected_tokens_cnts: tensor([[2, 0],
+    #         [0, 2],
+    #         [0, 0]], dtype=torch.int32)
+    # >>> Compare Type: int
+    # Max diff at (tensor(0), tensor(0)): test=1, ref=2, abs=1, rel=0.4999997615814209
+    # 精度不达标 (Mismatched elements:2/6, 33.333333% > 0.000000%)
+    # (0, 0): test=1.000000, ref=2.000000, diff=1.000000, rel=0.500000
+    # (1, 1): test=1.000000, ref=2.000000, diff=1.000000, rel=0.500000
