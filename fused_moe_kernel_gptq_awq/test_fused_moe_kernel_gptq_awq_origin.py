@@ -3,11 +3,6 @@ import torch_npu
 import triton
 import triton.language as tl
 
-import sys
-import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from utils import check_accuracy
-
 
 @triton.jit
 def write_zeros_to_output(
