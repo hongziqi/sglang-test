@@ -245,7 +245,7 @@ def fused_moe_kernel_gptq_awq(
 def test_and_save_gpu_result():
     test_data = torch.load("62_simple_fused_moe_test_data.pt", map_location="cpu", weights_only=True)
 
-    device = "npu:0"
+    device = "cuda"
 
     A = test_data["A"].to(device)   # 16, 64
     B = test_data["B"].to(device)   # 2, 32, 64
@@ -386,61 +386,10 @@ def test_and_save_gpu_result():
         # dbg_b_deq_ptr=dbg_b_deq, dbg_acc_ptr=dbg_acc,
     )
 
-    torch.npu.synchronize()
-    # ---------
-    # print("-" * 50)
-    # print("调试输出：")
-    # print(f"dbg_a (A tile) shape: {dbg_a.shape}, dtype={dbg_a.dtype}")
-    # print(f"dbg_b_raw (B raw tile) shape: {dbg_b_raw.shape}, dtype={dbg_b_raw.dtype}")
-    # print(f"dbg_scale (scale tile) shape: {dbg_scale.shape}, dtype={dbg_scale.dtype}")
-    # print(f"dbg_b_deq (B deq tile) shape: {dbg_b_deq.shape}, dtype={dbg_b_deq.dtype}")
-    # print(f"dbg_acc (accumulator tile) shape: {dbg_acc.shape}, dtype={dbg_acc.dtype}")
-    # print("dbg_a:", dbg_a)
-    # print("dbg_b_raw:", dbg_b_raw)
-    # print("dbg_scale:", dbg_scale)
-    # print("dbg_b_deq:", dbg_b_deq)
-    # print("dbg_acc:", dbg_acc)
-    # print("-" * 50)
-    #  # ===== 在 PyTorch 端构造同位置的“期望”tile 并比对 =====
-    # # 当前块 token 索引与 mask
-    # offs_token_id = DBG_PID_M * BLOCK_SIZE_M + torch.arange(BLOCK_SIZE_M, device=device, dtype=torch.long)
-    # offs_token = sorted_token_ids[offs_token_id]
-    # token_mask = offs_token < num_valid_tokens
-    # base_k = DBG_K * BLOCK_SIZE_K
-    # n0 = DBG_PID_N * BLOCK_SIZE_N
-    # n1 = min(n0 + BLOCK_SIZE_N, N)
-
-    # # 期望的 A 子块（注意 A 的行索引使用 offs_token//top_k）
-    # a_ref = torch.zeros((BLOCK_SIZE_M, BLOCK_SIZE_K), dtype=torch.float32, device=device)
-    # valid_rows = torch.nonzero(token_mask, as_tuple=False).squeeze(-1)
-    # if valid_rows.numel() > 0:
-    #     a_rows = (offs_token[valid_rows] // top_k).to(torch.long)
-    #     a_ref[valid_rows, :n1-n0] = A.index_select(0, a_rows)[:, base_k:base_k+BLOCK_SIZE_K]
-
-    # # 期望的 B 原始子块（布局与 kernel 一致：B[e, n, k]）
-    # e = expert_ids[DBG_PID_M].item()
-    # b_raw_ref = B[e, n0:n1, base_k:base_k+BLOCK_SIZE_K].transpose(0, 1).contiguous().to(torch.float32)  # [K,N]
-
-    # # 期望的 scale 子块（按 group_size 聚合 K 维）
-    # scale_ref = B_scale[e, n0:n1, (base_k // group_size):((base_k+BLOCK_SIZE_K+group_size-1)//group_size)]
-    # # 展开到 [K,N]
-    # k_idx = torch.arange(base_k, base_k+BLOCK_SIZE_K, device=device) // group_size
-    # scale_ref = B_scale[e, n0:n1, k_idx - (base_k // group_size)].transpose(0, 1).contiguous().to(torch.float32)
-
-    # b_deq_ref = (b_raw_ref - 128.0) * scale_ref
-
-    # print("check a tile max|diff|:", (dbg_a - a_ref).abs().max().item())
-    # print("check b_raw tile max|diff|:", (dbg_b_raw - b_raw_ref).abs().max().item())
-    # print("check scale tile max|diff|:", (dbg_scale - scale_ref).abs().max().item())
-    # print("check b_deq tile max|diff|:", (dbg_b_deq - b_deq_ref).abs().max().item())
-
-    # # ---------
-
-
     print("=" * 50)
     print(f"Before cast dtypes: A={A.dtype}, B={B.dtype}, B_scale={B_scale.dtype}, C={C.dtype}")
     # A=torch.float32, B=torch.int8, B_scale=torch.float32, C=torch.float32
-    print("NPU计算结果：")
+    print("GPU计算结果：")
     print(f"C矩阵形状: {C.shape}, dtype={C.dtype}")
     print(f"C矩阵中非零元素比例: {torch.count_nonzero(C).item() / C.numel():.6f}")
     # print(f"C矩阵的值：{C.cpu().tolist()}")
@@ -490,34 +439,34 @@ def test_and_save_gpu_result():
     print("手动计算结果：", manual_result)
     print("Kernel计算结果：", C[token_idx, 0])
     print("差异", torch.abs(manual_result - C[token_idx, 0].float()).max())
-    # 手动计算结果： tensor([ -919.4400, -1775.6799,  -856.2401, -1649.2799,  -793.0400, -1522.8800,
-    #         -729.8400, -1396.4801,  -666.6400, -1270.0800,  -603.4400, -1143.6799,
-    #         -540.2400, -1081.7920,  -662.8960, -1544.1920,  -868.4960, -1846.5920,
-    #         -968.4960, -2008.1921, -1014.9921, -2030.7841, -1009.3920, -1983.2321,
-    #         -966.4160, -1876.0320,  -906.8000, -1750.4001,  -843.6000, -1624.0000,
-    #         -780.4000, -1497.6000], device='npu:0')
-    # Kernel计算结果： tensor([3.6840e-42, 0.0000e+00, 3.7737e-42, 0.0000e+00, 3.8634e-42, 0.0000e+00,
-    #         3.9531e-42, 0.0000e+00, 4.0427e-42, 0.0000e+00, 4.1324e-42, 0.0000e+00,
-    #         4.2221e-42, 0.0000e+00, 4.3118e-42, 0.0000e+00, 5.1189e-42, 0.0000e+00,
-    #         5.2086e-42, 0.0000e+00, 5.2983e-42, 0.0000e+00, 5.3880e-42, 0.0000e+00,
-    #         5.4777e-42, 0.0000e+00, 5.5674e-42, 0.0000e+00, 5.6570e-42, 0.0000e+00,
-    #         5.7467e-42, 0.0000e+00], device='npu:0')
-    # 差异 tensor(2030.7841, device='npu:0')
-
-    # CPU 模式
-    # 手动计算结果： tensor([ -919.4400, -1775.6799,  -856.2401, -1649.2799,  -793.0400, -1522.8800,
-    #      -729.8400, -1396.4801,  -666.6400, -1270.0800,  -603.4400, -1143.6799,
+    # 手动计算结果： tensor([ -919.4401, -1775.6801,  -856.2400, -1649.2800,  -793.0400, -1522.8801,
+    #      -729.8400, -1396.4800,  -666.6400, -1270.0801,  -603.4401, -1143.6801,
     #      -540.2400, -1081.7920,  -662.8960, -1544.1920,  -868.4960, -1846.5920,
     #      -968.4960, -2008.1921, -1014.9921, -2030.7841, -1009.3920, -1983.2321,
-    #      -966.4160, -1876.0320,  -906.8000, -1750.4001,  -843.6000, -1624.0000,
-    #      -780.4000, -1497.6000], device='npu:0')
+    #      -966.4160, -1876.0320,  -906.8000, -1750.4000,  -843.6000, -1624.0000,
+    #      -780.4000, -1497.6001], device='cuda:0')
+    # Kernel计算结果： tensor([ -918.8555, -1774.5531,  -855.6960, -1648.2280,  -792.5282, -1521.8832,
+    #         -729.3542, -1395.5325,  -666.1854, -1269.2214,  -603.0344, -1142.9413,
+    #         -539.9000, -1081.1003,  -662.4315, -1543.0348,  -867.8455, -1845.2762,
+    #         -967.8223, -2006.7955, -1014.2992, -2029.4473, -1008.7531, -1981.9814,
+    #         -965.7989, -1874.8174,  -906.2092, -1749.2592,  -843.0485, -1622.9315,
+    #         -779.8796, -1496.5854], device='cuda:0')
+    # 差异 tensor(1.3966, device='cuda:0')
+
+    # CPU 模式
+    # 手动计算结果： tensor([ -919.4401, -1775.6801,  -856.2400, -1649.2800,  -793.0400, -1522.8801,
+    #      -729.8400, -1396.4800,  -666.6400, -1270.0801,  -603.4401, -1143.6801,
+    #      -540.2400, -1081.7920,  -662.8960, -1544.1920,  -868.4960, -1846.5920,
+    #      -968.4960, -2008.1921, -1014.9921, -2030.7841, -1009.3920, -1983.2321,
+    #      -966.4160, -1876.0320,  -906.8000, -1750.4000,  -843.6000, -1624.0000,
+    #      -780.4000, -1497.6001], device='cuda:0')
     # Kernel计算结果： tensor([ -919.4399, -1775.6801,  -856.2400, -1649.2800,  -793.0400, -1522.8801,
     #         -729.8400, -1396.4800,  -666.6400, -1270.0801,  -603.4401, -1143.6801,
     #         -540.2400, -1081.7920,  -662.8960, -1544.1920,  -868.4960, -1846.5920,
     #         -968.4960, -2008.1919, -1014.9921, -2030.7841, -1009.3920, -1983.2321,
     #         -966.4160, -1876.0321,  -906.8000, -1750.3999,  -843.6000, -1624.0000,
-    #         -780.4000, -1497.6001], device='npu:0')
-    # 差异 tensor(0.0002, device='npu:0')
+    #         -780.4000, -1497.6001], device='cuda:0')
+    # 差异 tensor(0.0002, device='cuda:0')
 
 
 if __name__ == "__main__":
