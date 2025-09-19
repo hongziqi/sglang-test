@@ -3,6 +3,12 @@ import torch_npu
 import triton
 import triton.language as tl
 
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from utils import check_accuracy
+import numpy as np
+
 
 @triton.jit
 def write_zeros_to_output(
@@ -402,40 +408,40 @@ def test_and_save_gpu_result():
     # print("dbg_b_deq:", dbg_b_deq)
     # print("dbg_acc:", dbg_acc)
     # print("-" * 50)
-     # ===== 在 PyTorch 端构造同位置的“期望”tile 并比对 =====
-    # 当前块 token 索引与 mask
-    offs_token_id = DBG_PID_M * BLOCK_SIZE_M + torch.arange(BLOCK_SIZE_M, device=device, dtype=torch.long)
-    offs_token = sorted_token_ids[offs_token_id]
-    token_mask = offs_token < num_valid_tokens
-    base_k = DBG_K * BLOCK_SIZE_K
-    n0 = DBG_PID_N * BLOCK_SIZE_N
-    n1 = min(n0 + BLOCK_SIZE_N, N)
+    #  # ===== 在 PyTorch 端构造同位置的“期望”tile 并比对 =====
+    # # 当前块 token 索引与 mask
+    # offs_token_id = DBG_PID_M * BLOCK_SIZE_M + torch.arange(BLOCK_SIZE_M, device=device, dtype=torch.long)
+    # offs_token = sorted_token_ids[offs_token_id]
+    # token_mask = offs_token < num_valid_tokens
+    # base_k = DBG_K * BLOCK_SIZE_K
+    # n0 = DBG_PID_N * BLOCK_SIZE_N
+    # n1 = min(n0 + BLOCK_SIZE_N, N)
 
-    # 期望的 A 子块（注意 A 的行索引使用 offs_token//top_k）
-    a_ref = torch.zeros((BLOCK_SIZE_M, BLOCK_SIZE_K), dtype=torch.float32, device=device)
-    valid_rows = torch.nonzero(token_mask, as_tuple=False).squeeze(-1)
-    if valid_rows.numel() > 0:
-        a_rows = (offs_token[valid_rows] // top_k).to(torch.long)
-        a_ref[valid_rows, :n1-n0] = A.index_select(0, a_rows)[:, base_k:base_k+BLOCK_SIZE_K]
+    # # 期望的 A 子块（注意 A 的行索引使用 offs_token//top_k）
+    # a_ref = torch.zeros((BLOCK_SIZE_M, BLOCK_SIZE_K), dtype=torch.float32, device=device)
+    # valid_rows = torch.nonzero(token_mask, as_tuple=False).squeeze(-1)
+    # if valid_rows.numel() > 0:
+    #     a_rows = (offs_token[valid_rows] // top_k).to(torch.long)
+    #     a_ref[valid_rows, :n1-n0] = A.index_select(0, a_rows)[:, base_k:base_k+BLOCK_SIZE_K]
 
-    # 期望的 B 原始子块（布局与 kernel 一致：B[e, n, k]）
-    e = expert_ids[DBG_PID_M].item()
-    b_raw_ref = B[e, n0:n1, base_k:base_k+BLOCK_SIZE_K].transpose(0, 1).contiguous().to(torch.float32)  # [K,N]
+    # # 期望的 B 原始子块（布局与 kernel 一致：B[e, n, k]）
+    # e = expert_ids[DBG_PID_M].item()
+    # b_raw_ref = B[e, n0:n1, base_k:base_k+BLOCK_SIZE_K].transpose(0, 1).contiguous().to(torch.float32)  # [K,N]
 
-    # 期望的 scale 子块（按 group_size 聚合 K 维）
-    scale_ref = B_scale[e, n0:n1, (base_k // group_size):((base_k+BLOCK_SIZE_K+group_size-1)//group_size)]
-    # 展开到 [K,N]
-    k_idx = torch.arange(base_k, base_k+BLOCK_SIZE_K, device=device) // group_size
-    scale_ref = B_scale[e, n0:n1, k_idx - (base_k // group_size)].transpose(0, 1).contiguous().to(torch.float32)
+    # # 期望的 scale 子块（按 group_size 聚合 K 维）
+    # scale_ref = B_scale[e, n0:n1, (base_k // group_size):((base_k+BLOCK_SIZE_K+group_size-1)//group_size)]
+    # # 展开到 [K,N]
+    # k_idx = torch.arange(base_k, base_k+BLOCK_SIZE_K, device=device) // group_size
+    # scale_ref = B_scale[e, n0:n1, k_idx - (base_k // group_size)].transpose(0, 1).contiguous().to(torch.float32)
 
-    b_deq_ref = (b_raw_ref - 128.0) * scale_ref
+    # b_deq_ref = (b_raw_ref - 128.0) * scale_ref
 
-    print("check a tile max|diff|:", (dbg_a - a_ref).abs().max().item())
-    print("check b_raw tile max|diff|:", (dbg_b_raw - b_raw_ref).abs().max().item())
-    print("check scale tile max|diff|:", (dbg_scale - scale_ref).abs().max().item())
-    print("check b_deq tile max|diff|:", (dbg_b_deq - b_deq_ref).abs().max().item())
+    # print("check a tile max|diff|:", (dbg_a - a_ref).abs().max().item())
+    # print("check b_raw tile max|diff|:", (dbg_b_raw - b_raw_ref).abs().max().item())
+    # print("check scale tile max|diff|:", (dbg_scale - scale_ref).abs().max().item())
+    # print("check b_deq tile max|diff|:", (dbg_b_deq - b_deq_ref).abs().max().item())
 
-    # ---------
+    # # ---------
 
 
     print("=" * 50)
