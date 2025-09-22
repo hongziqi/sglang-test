@@ -1,30 +1,9 @@
-import torch
 import triton
 import triton.language as tl
-
-
-@triton.jit
-def write_zeros_to_output(
-    c_ptr,
-    stride_cm,
-    stride_cn,
-    pid_n,
-    N,
-    offs_token,
-    token_mask,
-    BLOCK_SIZE_M: tl.constexpr,
-    BLOCK_SIZE_N: tl.constexpr,
-    compute_type: tl.constexpr,
-):
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=compute_type)
-    offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-    c_ptrs = c_ptr + stride_cm * offs_token[:, None] + stride_cn * offs_cn[None, :]
-    c_mask = token_mask[:, None] & (offs_cn[None, :] < N)
-    tl.store(c_ptrs, accumulator, mask=c_mask)
-
+import torch
 
 @triton.jit
-def fused_moe_kernel_gptq_awq(
+def test_store_result_kernel(
     # Pointers to matrices
     a_ptr,          # 输入 token 向量
     b_ptr,          # MOE 专家权重矩阵
@@ -70,48 +49,13 @@ def fused_moe_kernel_gptq_awq(
     use_int4_w4a16: tl.constexpr,
     use_int8_w8a16: tl.constexpr,
     even_Ks: tl.constexpr,           # K 维度是否为 BLOCK_SIZE_K 的整数倍
-
-    # # ---- 调试开关与目标子块 ----
-    # DBG_ENABLE: tl.constexpr,         # 是否启用调试写
-    # DBG_PID_M: tl.constexpr,          # 望检查的 pid_m
-    # DBG_PID_N: tl.constexpr,          # 望检查的 pid_n
-    # DBG_K: tl.constexpr,              # 望检查的第几个 K block（0 表示第一个）
-    # # ---- 调试输出缓冲区（全部视为 row-major 连续）----
-    # dbg_a_ptr,        # float32 [BLOCK_SIZE_M, BLOCK_SIZE_K]
-    # dbg_b_raw_ptr,    # float32 [BLOCK_SIZE_K, BLOCK_SIZE_N]（把原始 int8 转成 float 写）
-    # dbg_scale_ptr,    # float32 [BLOCK_SIZE_K, BLOCK_SIZE_N]
-    # dbg_b_deq_ptr,    # float32 [BLOCK_SIZE_K, BLOCK_SIZE_N]
-    # dbg_acc_ptr,      # float32 [BLOCK_SIZE_M, BLOCK_SIZE_N]
-
+    # ---- 调试输出缓冲区（全部视为 row-major 连续）----
+    dbg_a_ptr,        # 存储 kernel 加载的 A 数据 (float32)
+    dbg_b_raw_ptr,    # 存储 kernel 加载的 B 原始 int8 数据 (float32)
+    dbg_scale_ptr,    # 存储 kernel 加载的 scale 数据 (float32)
+    dbg_b_deq_ptr,    # 存储反量化后的 B 数据 (float32)
+    dbg_offs_token_ptr,  # 存储 kernel 加载的 token 索引 (int64)
 ):
-    """
-    Implements the fused computation for a Mixture of Experts (MOE) using
-    token and expert matrices.
-    Key Parameters:
-    - A: The input tensor representing tokens with shape (*, K), where '*' can
-        be any shape representing batches and K is the feature dimension of
-        each token.
-    - B: The stacked MOE weight tensor with shape (E, N, K), where E is
-        the number of experts, K is the input feature dimension, and N is
-        the output feature dimension.
-    - C: The output cache tensor with shape (M, topk, N), where M is the
-        total number of tokens post padding, topk is the number of times
-        each token is repeated, and N is the output feature dimension.
-    - sorted_token_ids: A tensor containing the sorted indices of tokens,
-        repeated topk times and arranged by the expert index they are
-        assigned to.
-    - expert_ids: A tensor containing the indices of the expert for each
-        block. It determines which expert matrix from B should be used for
-        each block in A.
-    This kernel performs the multiplication of a token by its corresponding
-    expert matrix as determined by `expert_ids`. The sorting of
-    `sorted_token_ids` by expert index and padding ensures divisibility by
-    BLOCK_SIZE_M, which is necessary to maintain consistency in block matrix
-    multiplication across different blocks processed by the same expert.
-    """
-    # -----------------------------------------------------------
-    # Map program ids `pid` to the block of C it should compute.
-    # This is done in a grouped ordering to promote L2 data reuse.
     pid = tl.program_id(axis=0)             # 当前程序 id
     num_pid_m = tl.cdiv(EM, BLOCK_SIZE_M)   # M 维度的分块数量
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)    # N 维度的分块数量
@@ -137,22 +81,28 @@ def fused_moe_kernel_gptq_awq(
     # 当前块的token索引偏移（BLOCK_SIZE_M个连续token）
     offs_token_id = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M).to(tl.int64)
     # 从sorted_token_ids_ptr加载实际token索引（已按专家分组排序）
-    offs_token = tl.load(sorted_token_ids_ptr + offs_token_id)
+    offs_token = tl.load(sorted_token_ids_ptr + offs_token_id)  # [BLOCK_SIZE_M]
     # 生成token有效mask（仅处理小于num_valid_tokens的真实token）
     token_mask = offs_token < num_valid_tokens
+
+    # --------------------------
+    # 2. 存储调试变量：offs_token（token 索引）
+    # --------------------------
+    dbg_offs_token_offset = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    tl.store(dbg_offs_token_ptr + dbg_offs_token_offset, offs_token)
 
     # 通过 expert_ids_ptr 得到当前 block 的专家 id（off_experts）
     off_experts = tl.load(expert_ids_ptr + pid_m).to(tl.int64)
 
     # N维度的块内偏移（当前块在N维度的起始位置）
-    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)) % N
+    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)) % N # [BLOCK_SIZE_N]
     # K维度的块内偏移（每次循环处理的K子块）
-    offs_k = tl.arange(0, BLOCK_SIZE_K)
+    offs_k = tl.arange(0, BLOCK_SIZE_K) # [BLOCK_SIZE_K]
     # 输入token的指针（形状：[BLOCK_SIZE_M, BLOCK_SIZE_K]，每个元素对应A矩阵的一个位置）
     a_ptrs = a_ptr + (
         offs_token[:, None] // top_k * stride_am + offs_k[None, :] * stride_ak
-    )
-    
+    )   # [BLOCK_SIZE_M, BLOCK_SIZE_K]
+
     # === （1.简化kernel 逻辑）仅测int8的量化
     # 专家权重的指针（形状：[BLOCK_SIZE_K, BLOCK_SIZE_N]，每个元素对应B矩阵的一个位置）
     b_ptrs = (
@@ -160,16 +110,17 @@ def fused_moe_kernel_gptq_awq(
         + off_experts * stride_be
         + offs_k[:, None] * stride_bk
         + offs_bn[None, :] * stride_bn
-    )
+    )   # [BLOCK_SIZE_K, BLOCK_SIZE_N]
     b_zp_num = 128
-    # === （1.简化kernel 逻辑）仅测int8的量化
+
     # -----------------------------------------------------------
     # Iterate to compute a block of the C matrix.
     # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
     # of fp32 values for higher accuracy.
     # `accumulator` will be converted back to fp16 after the loop.
-    # 初始化累加器 accumulator
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    num_k_iter = tl.cdiv(K, BLOCK_SIZE_K)  # 新增：K 方向迭代次数
+
     # 按 K 维度分块遍历，处理每个 block 的子矩阵
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the
@@ -187,65 +138,88 @@ def fused_moe_kernel_gptq_awq(
             a_ptrs,
             mask=token_mask[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K),
             other=0.0,
-        )
+        ) # [BLOCK_SIZE_M, BLOCK_SIZE_K]
         # 加载B矩阵的当前K子块（专家权重，int8类型）
-        b_raw = tl.load(b_ptrs)
+        b_raw = tl.load(b_ptrs)  # [BLOCK_SIZE_K, BLOCK_SIZE_N]
         # 计算当前 block 的量化 scale 指针，按 group_size 分组
         b_scale_ptrs = (
             b_scale_ptr
             + off_experts * stride_bse
             + offs_bn[None, :] * stride_bsn
             + ((offs_k[:, None] + BLOCK_SIZE_K * k) // group_size) * stride_bsk
-        )
-        b_scale = tl.load(b_scale_ptrs, mask=k_mask, other=k_other)
+        )   # [BLOCK_SIZE_K, BLOCK_SIZE_N]
+        b_scale = tl.load(b_scale_ptrs, mask=k_mask, other=k_other)  # [BLOCK_SIZE_K, BLOCK_SIZE_N]
 
         # 取出 scale 并转为 float32
         b_scale = b_scale.to(tl.float32)
 
         # === （3.简化kernel 逻辑）仅测int8的量化
         # 对 int8 权重做反量化：(b - 128) * scale
-        b_deq = ((b_raw.to(tl.float32) - b_zp_num) * b_scale).to(compute_type)
+        b_deq = ((b_raw.to(tl.float32) - b_zp_num) * b_scale).to(compute_type) # [BLOCK_SIZE_K, BLOCK_SIZE_N]
 
-        # ---- 调试写：仅在目标子块/目标 k 次迭代写一次 ----
-        # if DBG_ENABLE and (k == DBG_K):  # 这两个是 tl.constexpr，可做编译期裁剪
-        #     cond = (pid_m == DBG_PID_M) & (pid_n == DBG_PID_N)  # 运行期布尔，用按位与
-        #     # a tile -> [M,K]
-        #     ra = tl.arange(0, BLOCK_SIZE_M)[:, None] * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)[None, :]
-        #     tl.store(dbg_a_ptr + ra, a.to(tl.float32), mask=cond)
+        # --------------------------
+        # 4. 存储当前 K 子块的调试数据
+        # --------------------------
+        # 4.1 dbg_a：按 (pid_m, k) 索引存储 A 子块（[BLOCK_SIZE_M, BLOCK_SIZE_K]）
+        dbg_a_offset = (pid_m * num_k_iter + k) * BLOCK_SIZE_M * BLOCK_SIZE_K + \
+                       tl.arange(0, BLOCK_SIZE_M)[:, None] * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)[None, :]
+        tl.store(dbg_a_ptr + dbg_a_offset, a, mask=token_mask[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K))
 
-        #     # b_raw/b_scale/b_deq tile -> [K,N]（行主序）
-        #     rb = tl.arange(0, BLOCK_SIZE_K)[:, None] * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)[None, :]
-        #     tl.store(dbg_b_raw_ptr + rb, b_raw.to(tl.float32), mask=cond)
-        #     tl.store(dbg_scale_ptr + rb, b_scale, mask=cond)
-        #     tl.store(dbg_b_deq_ptr + rb, b_deq.to(tl.float32), mask=cond)
+        # 计算B调试数据的存储偏移（核心修复：基于全局K位置）
+        expert_stride = K * N  # 每个专家的存储步长（K*N）
+        # 全局K维度偏移对应的存储位置 = 全局K偏移 * N（每个K元素跨N个位置）
+        global_k_storage_offset = k * BLOCK_SIZE_K * N
+        # 当前N块的偏移 = pid_n * BLOCK_SIZE_N
+        n_block_offset = pid_n * BLOCK_SIZE_N
+        # 块内K和N的偏移
+        inner_offset = tl.arange(0, BLOCK_SIZE_K)[:, None] * N + tl.arange(0, BLOCK_SIZE_N)[None, :]
 
-        # ---- 调试写结束 ----
+        # 最终调试数据存储位置 = 专家偏移 + 全局K偏移 + N块偏移 + 块内偏移
+        dbg_b_raw_offset = (
+            off_experts * expert_stride
+            + global_k_storage_offset
+            + n_block_offset
+            + inner_offset
+        )
 
-        # 矩阵乘法并累加（A[M,K] * B[K,N] -> 累加至accumulator[M,N]）
+        # 存储B相关调试数据
+        tl.store(dbg_b_raw_ptr + dbg_b_raw_offset, b_raw.to(tl.float32), mask=k_mask)
+        tl.store(dbg_scale_ptr + dbg_b_raw_offset, b_scale, mask=k_mask)
+        tl.store(dbg_b_deq_ptr + dbg_b_raw_offset, b_deq, mask=k_mask)
+
         accumulator = tl.dot(a, b_deq, acc=accumulator)
 
         # 指针前移，准备下一个 K block
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
-        # === （3.简化kernel 逻辑）仅测int8的量化
 
-    # 将累加结果转为目标类型（如 fp16）
-    accumulator = accumulator.to(compute_type)
-    # 输出N维度的偏移
+    
+    # 2. 计算输出N维度的偏移
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-    # 输出矩阵的指针（形状：[BLOCK_SIZE_M, BLOCK_SIZE_N]）
+    
+    # 3. 加载token索引和mask（模拟原逻辑中的token信息）
+     # 当前块的token索引偏移（BLOCK_SIZE_M个连续token）
+    offs_token_id = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M).to(tl.int64)
+    # 从sorted_token_ids_ptr加载实际token索引（已按专家分组排序）
+    offs_token = tl.load(sorted_token_ids_ptr + offs_token_id)
+    # 生成token有效mask（仅处理小于num_valid_tokens的真实token）
+    token_mask = offs_token < num_valid_tokens
+
+    # 4. 计算输出矩阵的指针（形状：[BLOCK_SIZE_M, BLOCK_SIZE_N]）
     c_ptrs = c_ptr + stride_cm * offs_token[:, None] + stride_cn * offs_cn[None, :]
-    # 输出有效mask（只写入有效token和有效N区域）
+    
+    # 5. 生成输出有效mask（只写入有效token和有效N区域）
     c_mask = token_mask[:, None] & (offs_cn[None, :] < N)
-    # 存储结果
+    
+    # 6. 存储结果
     tl.store(c_ptrs, accumulator, mask=c_mask)
 
 
-
-def test_and_save_gpu_result():
+def test_fn():
     test_data = torch.load("62_simple_fused_moe_test_data.pt", map_location="cpu", weights_only=True)
 
     device = "npu:0"
+    # device = "cuda"
 
     A = test_data["A"].to(device)   # 16, 64
     B = test_data["B"].to(device)   # 2, 32, 64
@@ -326,22 +300,30 @@ def test_and_save_gpu_result():
 
     C_initial = C.clone()
 
-
-    # ---- 调试开关与目标子块 ----
-     # 选择要检查的子块：第 0 个 pid_m、pid_n，和第 0 个 K-block 
-    DBG_ENABLE = True
-    DBG_PID_M = 0
-    DBG_PID_N = 0
-    DBG_K = 1
-
-    dbg_a = torch.empty((BLOCK_SIZE_M, BLOCK_SIZE_K), dtype=torch.float32, device=device)
-    dbg_b_raw = torch.empty((BLOCK_SIZE_K, BLOCK_SIZE_N), dtype=torch.float32, device=device)
-    dbg_scale = torch.empty((BLOCK_SIZE_K, BLOCK_SIZE_N), dtype=torch.float32, device=device)
-    dbg_b_deq = torch.empty((BLOCK_SIZE_K, BLOCK_SIZE_N), dtype=torch.float32, device=device)
-    dbg_acc = torch.empty((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=torch.float32, device=device)
     # ---- 调试输出缓冲区 ----
+    # --------------------------
+    # 2. 初始化调试缓冲区（匹配 kernel 存储逻辑）
+    # --------------------------
+    num_pid_m = triton.cdiv(EM, BLOCK_SIZE_M)  # 32 / 16 = 2（M 维度分块数）
+    num_pid_n = triton.cdiv(N, BLOCK_SIZE_N)  # 32 / 16 = 2（N 维度分块数）
+    num_k_iter = triton.cdiv(K, BLOCK_SIZE_K)  # 64 / 16 = 4（K 维度迭代次数）
 
-    fused_moe_kernel_gptq_awq[grid](
+    # dbg_offs_token：存储 kernel 加载的 token 索引（与 sorted_token_ids 长度一致）
+    dbg_offs_token = torch.empty(EM, dtype=torch.int64, device=device)
+
+    # dbg_a：存储 kernel 加载的 A 数据（shape: [num_pid_m, num_k_iter, BLOCK_SIZE_M, BLOCK_SIZE_K]）
+    dbg_a = torch.zeros((num_pid_m, num_k_iter, BLOCK_SIZE_M, BLOCK_SIZE_K), dtype=torch.float32, device=device)
+    num_experts = B.shape[0]  # 2（专家数量）
+
+    # dbg_b_raw/dbg_scale/dbg_b_deq：存储 B 相关数据（shape: [num_experts, K, N]）
+    dbg_b_raw = torch.zeros((num_experts, K, N), dtype=torch.float32, device=device)
+    dbg_scale = torch.zeros((num_experts, K, N), dtype=torch.float32, device=device)
+    dbg_b_deq = torch.zeros((num_experts, K, N), dtype=torch.float32, device=device)
+
+    # 新增：accumulator中间值缓冲区（[num_pid_m, num_k_iter, BLOCK_SIZE_M, BLOCK_SIZE_N]）
+    dbg_accumulator = torch.zeros((num_pid_m, num_k_iter, BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=torch.float32, device=device)
+
+    test_store_result_kernel[grid](
         A,
         B,
         C,
@@ -381,69 +363,19 @@ def test_and_save_gpu_result():
         BLOCK_SIZE_K=BLOCK_SIZE_K,
         GROUP_SIZE_M=GROUP_SIZE_M,
         # # 调试参数
-        # DBG_ENABLE=DBG_ENABLE, DBG_PID_M=DBG_PID_M, DBG_PID_N=DBG_PID_N, DBG_K=DBG_K,
-        # dbg_a_ptr=dbg_a, dbg_b_raw_ptr=dbg_b_raw, dbg_scale_ptr=dbg_scale,
-        # dbg_b_deq_ptr=dbg_b_deq, dbg_acc_ptr=dbg_acc,
+        dbg_a_ptr=dbg_a,
+        dbg_b_raw_ptr=dbg_b_raw,
+        dbg_scale_ptr=dbg_scale,
+        dbg_b_deq_ptr=dbg_b_deq,
+        dbg_offs_token_ptr=dbg_offs_token,
+        dbg_accumulator_ptr=dbg_accumulator,
     )
-
-    torch.npu.synchronize()
-    # ---------
-    # print("-" * 50)
-    # print("调试输出：")
-    # print(f"dbg_a (A tile) shape: {dbg_a.shape}, dtype={dbg_a.dtype}")
-    # print(f"dbg_b_raw (B raw tile) shape: {dbg_b_raw.shape}, dtype={dbg_b_raw.dtype}")
-    # print(f"dbg_scale (scale tile) shape: {dbg_scale.shape}, dtype={dbg_scale.dtype}")
-    # print(f"dbg_b_deq (B deq tile) shape: {dbg_b_deq.shape}, dtype={dbg_b_deq.dtype}")
-    # print(f"dbg_acc (accumulator tile) shape: {dbg_acc.shape}, dtype={dbg_acc.dtype}")
-    # print("dbg_a:", dbg_a)
-    # print("dbg_b_raw:", dbg_b_raw)
-    # print("dbg_scale:", dbg_scale)
-    # print("dbg_b_deq:", dbg_b_deq)
-    # print("dbg_acc:", dbg_acc)
-    # print("-" * 50)
-    #  # ===== 在 PyTorch 端构造同位置的“期望”tile 并比对 =====
-    # # 当前块 token 索引与 mask
-    # offs_token_id = DBG_PID_M * BLOCK_SIZE_M + torch.arange(BLOCK_SIZE_M, device=device, dtype=torch.long)
-    # offs_token = sorted_token_ids[offs_token_id]
-    # token_mask = offs_token < num_valid_tokens
-    # base_k = DBG_K * BLOCK_SIZE_K
-    # n0 = DBG_PID_N * BLOCK_SIZE_N
-    # n1 = min(n0 + BLOCK_SIZE_N, N)
-
-    # # 期望的 A 子块（注意 A 的行索引使用 offs_token//top_k）
-    # a_ref = torch.zeros((BLOCK_SIZE_M, BLOCK_SIZE_K), dtype=torch.float32, device=device)
-    # valid_rows = torch.nonzero(token_mask, as_tuple=False).squeeze(-1)
-    # if valid_rows.numel() > 0:
-    #     a_rows = (offs_token[valid_rows] // top_k).to(torch.long)
-    #     a_ref[valid_rows, :n1-n0] = A.index_select(0, a_rows)[:, base_k:base_k+BLOCK_SIZE_K]
-
-    # # 期望的 B 原始子块（布局与 kernel 一致：B[e, n, k]）
-    # e = expert_ids[DBG_PID_M].item()
-    # b_raw_ref = B[e, n0:n1, base_k:base_k+BLOCK_SIZE_K].transpose(0, 1).contiguous().to(torch.float32)  # [K,N]
-
-    # # 期望的 scale 子块（按 group_size 聚合 K 维）
-    # scale_ref = B_scale[e, n0:n1, (base_k // group_size):((base_k+BLOCK_SIZE_K+group_size-1)//group_size)]
-    # # 展开到 [K,N]
-    # k_idx = torch.arange(base_k, base_k+BLOCK_SIZE_K, device=device) // group_size
-    # scale_ref = B_scale[e, n0:n1, k_idx - (base_k // group_size)].transpose(0, 1).contiguous().to(torch.float32)
-
-    # b_deq_ref = (b_raw_ref - 128.0) * scale_ref
-
-    # print("check a tile max|diff|:", (dbg_a - a_ref).abs().max().item())
-    # print("check b_raw tile max|diff|:", (dbg_b_raw - b_raw_ref).abs().max().item())
-    # print("check scale tile max|diff|:", (dbg_scale - scale_ref).abs().max().item())
-    # print("check b_deq tile max|diff|:", (dbg_b_deq - b_deq_ref).abs().max().item())
-
-    # # ---------
-
 
     print("=" * 50)
     print(f"Before cast dtypes: A={A.dtype}, B={B.dtype}, B_scale={B_scale.dtype}, C={C.dtype}")
     # A=torch.float32, B=torch.int8, B_scale=torch.float32, C=torch.float32
     print("NPU计算结果：")
     print(f"C矩阵形状: {C.shape}, dtype={C.dtype}")
-    print(f"C矩阵中非零元素比例: {torch.count_nonzero(C).item() / C.numel():.6f}")
-    # print(f"C矩阵的值：{C.cpu().tolist()}")
 
     token_idx = 0
     expert_ids = 0
@@ -462,63 +394,95 @@ def test_and_save_gpu_result():
             b_dequantized[n, k] = (b_matrix[n, k] - 128) * scale_matrix[n, group_idx]
     # 手动计算矩阵乘法
     manual_result = torch.matmul(a_vector, b_dequantized.T)
-    # print("a_vector:", a_vector)
-    # a_vector: tensor([0.0000, 0.0100, 0.0200, 0.0300, 0.0400, 0.0500, 0.0600, 0.0700, 0.0800,
-    #     0.0900, 0.1000, 0.1100, 0.1200, 0.1300, 0.1400, 0.1500, 0.1600, 0.1700,
-    #     0.1800, 0.1900, 0.2000, 0.2100, 0.2200, 0.2300, 0.2400, 0.2500, 0.2600,
-    #     0.2700, 0.2800, 0.2900, 0.3000, 0.3100, 0.3200, 0.3300, 0.3400, 0.3500,
-    #     0.3600, 0.3700, 0.3800, 0.3900, 0.4000, 0.4100, 0.4200, 0.4300, 0.4400,
-    #     0.4500, 0.4600, 0.4700, 0.4800, 0.4900, 0.5000, 0.5100, 0.5200, 0.5300,
-    #     0.5400, 0.5500, 0.5600, 0.5700, 0.5800, 0.5900, 0.6000, 0.6100, 0.6200,
-    #     0.6300], device='npu:0')
-    # print("反量化后的权重矩阵：", b_dequantized)
-    # 反量化后的权重矩阵： tensor([[ -19.2000,  -19.1000,  -19.0000,  ...,  -52.4000,  -52.0000,
-    #       -51.6000],
-    #     [ -37.4000,  -37.2000,  -37.0000,  ..., -100.8000, -100.0000,
-    #       -99.2000],
-    #     [ -18.2000,  -18.1000,  -18.0000,  ...,  -48.4000,  -48.0000,
-    #       -47.6000],
-    #     ...,
-    #     [ -35.0000,  -34.8000,  -34.6000,  ...,  -91.2000,  -90.4000,
-    #       -89.6000],
-    #     [ -17.0000,  -16.9000,  -16.8000,  ...,  -43.6000,  -43.2000,
-    #       -42.8000],
-    #     [ -33.0000,  -32.8000,  -32.6000,  ...,  -83.2000,  -82.4000,
-    #       -81.6000]], device='npu:0')
-    
 
     print("手动计算结果：", manual_result)
     print("Kernel计算结果：", C[token_idx, 0])
     print("差异", torch.abs(manual_result - C[token_idx, 0].float()).max())
-    # 手动计算结果： tensor([ -919.4400, -1775.6799,  -856.2401, -1649.2799,  -793.0400, -1522.8800,
-    #         -729.8400, -1396.4801,  -666.6400, -1270.0800,  -603.4400, -1143.6799,
-    #         -540.2400, -1081.7920,  -662.8960, -1544.1920,  -868.4960, -1846.5920,
-    #         -968.4960, -2008.1921, -1014.9921, -2030.7841, -1009.3920, -1983.2321,
-    #         -966.4160, -1876.0320,  -906.8000, -1750.4001,  -843.6000, -1624.0000,
-    #         -780.4000, -1497.6000], device='npu:0')
-    # Kernel计算结果： tensor([3.6840e-42, 0.0000e+00, 3.7737e-42, 0.0000e+00, 3.8634e-42, 0.0000e+00,
-    #         3.9531e-42, 0.0000e+00, 4.0427e-42, 0.0000e+00, 4.1324e-42, 0.0000e+00,
-    #         4.2221e-42, 0.0000e+00, 4.3118e-42, 0.0000e+00, 5.1189e-42, 0.0000e+00,
-    #         5.2086e-42, 0.0000e+00, 5.2983e-42, 0.0000e+00, 5.3880e-42, 0.0000e+00,
-    #         5.4777e-42, 0.0000e+00, 5.5674e-42, 0.0000e+00, 5.6570e-42, 0.0000e+00,
-    #         5.7467e-42, 0.0000e+00], device='npu:0')
-    # 差异 tensor(2030.7841, device='npu:0')
+    
+    # --------------------------
+    # 4. 验证 dbg 与原变量的一致性
+    # --------------------------
+    print("=" * 80)
+    print("1. 基础参数验证")
+    print(f"   - 原 sorted_token_ids: {sorted_token_ids.cpu().tolist()}")
+    print(f"   - dbg_offs_token:     {dbg_offs_token.cpu().tolist()}")
+    print(f"   - token 索引一致性: {torch.equal(sorted_token_ids, dbg_offs_token)}")
+    print()
 
-    # CPU 模式
-    # 手动计算结果： tensor([ -919.4400, -1775.6799,  -856.2401, -1649.2799,  -793.0400, -1522.8800,
-    #      -729.8400, -1396.4801,  -666.6400, -1270.0800,  -603.4400, -1143.6799,
-    #      -540.2400, -1081.7920,  -662.8960, -1544.1920,  -868.4960, -1846.5920,
-    #      -968.4960, -2008.1921, -1014.9921, -2030.7841, -1009.3920, -1983.2321,
-    #      -966.4160, -1876.0320,  -906.8000, -1750.4001,  -843.6000, -1624.0000,
-    #      -780.4000, -1497.6000], device='npu:0')
-    # Kernel计算结果： tensor([ -919.4399, -1775.6801,  -856.2400, -1649.2800,  -793.0400, -1522.8801,
-    #         -729.8400, -1396.4800,  -666.6400, -1270.0801,  -603.4401, -1143.6801,
-    #         -540.2400, -1081.7920,  -662.8960, -1544.1920,  -868.4960, -1846.5920,
-    #         -968.4960, -2008.1919, -1014.9921, -2030.7841, -1009.3920, -1983.2321,
-    #         -966.4160, -1876.0321,  -906.8000, -1750.3999,  -843.6000, -1624.0000,
-    #         -780.4000, -1497.6001], device='npu:0')
-    # 差异 tensor(0.0002, device='npu:0')
+    # 4.1 验证 dbg_a 与原 A 的一致性
+    # 原 A 按 sorted_token_ids 索引提取（kernel 加载的 A 数据）
+    A_kernel_gt = A[sorted_token_ids // top_k]  # sorted_token_ids//top_k 对应原 A 的行索引
+    # dbg_a 重组为 [EM, K]（与 A_kernel_gt 维度一致）
+    dbg_a_reshaped = dbg_a.permute(0, 2, 1, 3).reshape(EM, K)  # [num_pid_m, BLOCK_SIZE_M, num_k_iter, BLOCK_SIZE_K] → [32,64]
+    # 计算误差
+    a_abs_err = torch.abs(A_kernel_gt - dbg_a_reshaped).max().item()
+    a_rel_err = (torch.abs(A_kernel_gt - dbg_a_reshaped) / (torch.abs(A_kernel_gt) + 1e-8)).max().item()
+
+    print("2. A 数据一致性验证")
+    print(f"   - 原 A 按 token 索引提取后 shape: {A_kernel_gt.shape}")
+    print(f"   - dbg_a 重组后 shape: {dbg_a_reshaped.shape}")
+    print(f"   - 最大绝对误差: {a_abs_err:.6f}")
+    print(f"   - 最大相对误差: {a_rel_err:.6f}")
+    print(f"   - A 数据一致性: {a_abs_err < 1e-6}")
+    print()
+
+    # B原始数据验证（修复后）
+    B_gt = B.permute(0, 2, 1).contiguous()  # [2, 32, 64] → [2, 64, 32] (专家数, K, N)
+    b_raw_abs_err = torch.abs(B_gt.float() - dbg_b_raw).max().item()
+    b_raw_rel_err = (torch.abs(B_gt.float() - dbg_b_raw) / (torch.abs(B_gt.float()) + 1e-8)).max().item()
+    print("3. B原始数据一致性验证")
+    print(f"   - 原B转置后shape: {B_gt.shape}, dbg_b_raw shape: {dbg_b_raw.shape}")
+    print(f"   - 最大绝对误差: {b_raw_abs_err:.6f}, 最大相对误差: {b_raw_rel_err:.6f}")
+    print(f"   - 一致性: {b_raw_abs_err < 1e-6}")
+    print("   - 前2x2数据对比:")
+    print(f"     原B: \n{B_gt[0, :2, :2].cpu().numpy()}")
+    print(f"     dbg: \n{dbg_b_raw[0, :2, :2].cpu().numpy()}")
+    print()
+
+    # B_scale验证（修复后）
+    B_scale_expand = B_scale.unsqueeze(-1).repeat(1, 1, 1, group_size)  # [2, 32, 4, 16]
+    B_scale_gt = B_scale_expand.reshape(num_experts, N, K).permute(0, 2, 1).contiguous()  # [2, 64, 32]
+    scale_abs_err = torch.abs(B_scale_gt - dbg_scale).max().item()
+    print("4. B_scale数据一致性验证")
+    print(f"   - 扩展转置后shape: {B_scale_gt.shape}, dbg_scale shape: {dbg_scale.shape}")
+    print(f"   - 最大绝对误差: {scale_abs_err:.6f}, 一致性: {scale_abs_err < 1e-6}")
+    print()
+
+    # B反量化验证（修复后）
+    B_deq_gt = ((B_gt.float() - 128) * B_scale_gt).contiguous()
+    b_deq_abs_err = torch.abs(B_deq_gt - dbg_b_deq).max().item()
+    print("5. B反量化数据一致性验证")
+    print(f"   - 手动计算shape: {B_deq_gt.shape}, dbg_b_deq shape: {dbg_b_deq.shape}")
+    print(f"   - 最大绝对误差: {b_deq_abs_err:.6f}, 一致性: {b_deq_abs_err < 1e-6}")
+    print("=" * 80)
+
+
+    torch.save({
+        "A": A,
+        "B": B,
+        "B_scale": B_scale,
+        "dbg_a": dbg_a,
+        "dbg_b_raw": dbg_b_raw,
+        "dbg_scale": dbg_scale,
+        "dbg_b_deq": dbg_b_deq,
+        "dbg_offs_token": dbg_offs_token,
+        "dbg_accumulator": dbg_accumulator,
+    }, "data_dbg_cpu.pt")
+
+
+def compare_results():
+    cpu_data = torch.load("data_dbg_cpu.pt", map_location="cpu", weights_only=True)
+    cpu_dbg_accumulator = cpu_data["dbg_accumulator"]
+
+    cuda_data = torch.load("data_dbg_cuda.pt", map_location="cpu", weights_only=True)
+    cuda_dbg_accumulator = cuda_data["dbg_accumulator"]
+
+    torch.testing.assert_close(cpu_dbg_accumulator, cuda_dbg_accumulator, rtol=1e-2, atol=1e-2)
+    print("CPU和NPU的dbg_accumulator结果一致！")
+
+
 
 
 if __name__ == "__main__":
-    test_and_save_gpu_result()
+    test_fn()
+    # compare_results()

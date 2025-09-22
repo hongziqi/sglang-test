@@ -377,7 +377,7 @@ def test_and_save_gpu_result():
     print(f"C矩阵最大值: {torch.max(C).item()}")
     print(f"C矩阵平均值: {torch.mean(C).item()}")
     print(f"C矩阵中非零元素比例: {torch.count_nonzero(C).item() / C.numel():.6f}")
-    print(f"C矩阵的值：{C.cpu().tolist()}")
+    # print(f"C矩阵的值：{C.cpu().tolist()}")
 
     token_idx = 0
     expert_ids = 0
@@ -410,6 +410,12 @@ def test_and_save_gpu_result():
     # Kernel计算结果： tensor([0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.,
     #         0., 0., 0., 0., 0., 0., 0., 0.], device='npu:0')
     # 差异 tensor(2030.7841, device='npu:0')
+
+    # 对比cuda的结果
+
+    C_cuda_data = torch.load("C_cuda_result.pt", map_location="cpu", weights_only=True)
+    torch.testing.assert_close(C.cpu(), C_cuda_data["C"], rtol=1e-3, atol=1e-3)
+    print("NPU和CUDA的结果一致！")
 
 
 if __name__ == "__main__":
