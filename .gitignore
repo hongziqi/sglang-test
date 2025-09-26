@@ -10,6 +10,8 @@ __pycache__
 
 extra-info/
 
+kernel_mata/
+
 *_npu_output.pt
 
 npu_profiling_results/

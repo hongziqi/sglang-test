@@ -85,7 +85,7 @@ def run_and_compare():
     expert_ids = torch.empty((ceil_div(numel, block_size),), dtype=torch.int32).npu()  # expected: [0, 1]
     # tokens_cnts初始值（全0），形状[num_experts+1, num_experts] = [3, 2]
     tokens_cnts = torch.zeros((3, 2), dtype=torch.int32).npu()  # expected: [[2,0],[0,2],[0,0]]
-    print(">> tokens_cnts initial:", tokens_cnts)
+    # print(">> tokens_cnts initial:", tokens_cnts)
     # cumsum：每个expert的token起始位置（前缀和）
     cumsum = torch.tensor([0, 2, 4], dtype=torch.int32).npu()
 
