@@ -50,7 +50,9 @@ module {
     %subview = memref.subview %reinterpret_cast[0, 0] [%21, 256] [1, 1] : memref<4x256xf32, strided<[1, 4], offset: ?>> to memref<?x256xf32, strided<[1, 4], offset: ?>>
     %subview_0 = memref.subview %alloc[0, 0] [%21, 256] [1, 1] : memref<4x256xf32> to memref<?x256xf32, strided<[256, 1]>>
     memref.copy %subview, %subview_0 : memref<?x256xf32, strided<[1, 4], offset: ?>> to memref<?x256xf32, strided<[256, 1]>>
+    annotation.mark %subview_0 {MayImplicitTransposeWithLastAxis} : memref<?x256xf32, strided<[256, 1]>>
     %23 = bufferization.to_tensor %alloc restrict writable : memref<4x256xf32>
+    annotation.mark %23 {MayImplicitTransposeWithLastAxis} : tensor<4x256xf32>
     %24 = scf.for %arg13 = %c0 to %c4 step %c1 iter_args(%arg14 = %0) -> (tensor<4x256xf32>) {
       %27 = scf.for %arg15 = %c0 to %c256 step %c1 iter_args(%arg16 = %arg14) -> (tensor<4x256xf32>) {
         %28 = arith.index_cast %arg15 : index to i32
@@ -65,12 +67,9 @@ module {
         %37 = arith.addi %34, %36 : i32
         %38 = arith.index_cast %37 : i32 to index
         %reinterpret_cast_3 = memref.reinterpret_cast %arg3 to offset: [%38], sizes: [1], strides: [1] : memref<?xf32> to memref<1xf32, strided<[1], offset: ?>>
-        %alloc_4 = memref.alloc() : memref<1xf32>
-        memref.copy %reinterpret_cast_3, %alloc_4 : memref<1xf32, strided<[1], offset: ?>> to memref<1xf32>
-        %39 = bufferization.to_tensor %alloc_4 restrict writable : memref<1xf32>
-        %extracted = tensor.extract %39[%c0] : tensor<1xf32>
+        %39 = memref.load %reinterpret_cast_3[%c0] : memref<1xf32, strided<[1], offset: ?>>
         %40 = tensor.empty() : tensor<1x1xf32>
-        %41 = linalg.fill ins(%extracted : f32) outs(%40 : tensor<1x1xf32>) -> tensor<1x1xf32>
+        %41 = linalg.fill ins(%39 : f32) outs(%40 : tensor<1x1xf32>) -> tensor<1x1xf32>
         %inserted_slice = tensor.insert_slice %41 into %arg16[%arg13, %arg15] [1, 1] [256, 1] : tensor<1x1xf32> into tensor<4x256xf32>
         scf.yield {DiscreteMemAccess} %inserted_slice : tensor<4x256xf32>
       } {ExtractedLoadOrStore}
