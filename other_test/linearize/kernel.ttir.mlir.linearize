@@ -1,0 +1,102 @@
+module {
+  tt.func public @save_cache_to_buffer_with_mask(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg4: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg5: !tt.ptr<i8> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %cst = arith.constant dense<10> : tensor<3xi32>
+    %cst_0 = arith.constant dense<15> : tensor<1xi64>
+    %c5 = arith.constant 5 : index
+    %cst_1 = arith.constant dense<0> : tensor<15xi8>
+    %c2_i32 = arith.constant 2 : i32
+    %cst_2 = arith.constant dense<0> : tensor<15xi32>
+    %cst_3 = arith.constant dense<1> : tensor<15xi32>
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %cst_4 = arith.constant dense<150> : tensor<15xi32>
+    %cst_5 = arith.constant dense<10> : tensor<15xi32>
+    %c10_i32 = arith.constant 10 : i32
+    %cst_6 = arith.constant dense<5> : tensor<15xi32>
+    %c5_i32 = arith.constant 5 : i32
+    %c15_i32 = arith.constant 15 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c15_i32 : i32
+    %2 = arith.index_cast %1 : i32 to index
+    %3 = tt.make_range {end = 15 : i32, start = 0 : i32} : tensor<15xi32>
+    %4 = tt.splat %1 : i32 -> tensor<15xi32>
+    %5 = arith.addi %4, %3 : tensor<15xi32>
+    %6 = arith.divsi %5, %cst_6 : tensor<15xi32>
+    %7 = arith.remsi %5, %cst_6 : tensor<15xi32>
+    %8 = arith.muli %6, %cst_5 : tensor<15xi32>
+    %9 = arith.addi %8, %7 : tensor<15xi32>
+    %10 = arith.cmpi slt, %9, %cst_4 : tensor<15xi32>
+    %11 = arith.select %10, %cst_3, %cst_2 : tensor<15xi1>, tensor<15xi32>
+    %12 = tt.splat %arg4 : !tt.ptr<i8> -> tensor<15x!tt.ptr<i8>>
+    %13 = tt.addptr %12, %5 : tensor<15x!tt.ptr<i8>>, tensor<15xi32>
+    %14 = arith.trunci %11 : tensor<15xi32> to tensor<15xi8>
+    tt.store %13, %14 : tensor<15x!tt.ptr<i8>>
+    scf.for %arg6 = %c0_i32 to %c15_i32 step %c1_i32  : i32 {
+      %18 = arith.addi %1, %arg6 : i32
+      %19 = tt.addptr %arg5, %18 : !tt.ptr<i8>, i32
+      %20 = arith.divsi %18, %c5_i32 : i32
+      %21 = arith.muli %20, %c10_i32 : i32
+      %22 = arith.remsi %18, %c5_i32 : i32
+      %23 = arith.addi %21, %22 : i32
+      %24 = arith.trunci %23 : i32 to i8
+      tt.store %19, %24 : !tt.ptr<i8>
+    }
+    %15 = arith.remsi %0, %c2_i32 : i32
+    %16 = arith.cmpi eq, %15, %c0_i32 : i32
+    scf.if %16 {
+      %18 = arith.divsi %2, %c5 : index
+      %19 = arith.remsi %2, %c5 : index
+      %20 = tt.make_range {end = 3 : i32, start = 0 : i32} : tensor<3xi32>
+      %21 = arith.index_cast %18 : index to i32
+      %22 = tt.splat %21 : i32 -> tensor<3xi32>
+      %23 = arith.addi %22, %20 : tensor<3xi32>
+      %24 = arith.muli %23, %cst : tensor<3xi32>
+      %25 = tt.expand_dims %24 {axis = 1 : i32} : tensor<3xi32> -> tensor<3x1xi32>
+      %26 = tt.broadcast %25 : tensor<3x1xi32> -> tensor<3x5xi32>
+      %27 = tt.make_range {end = 5 : i32, start = 0 : i32} : tensor<5xi32>
+      %28 = arith.index_cast %19 : index to i32
+      %29 = tt.splat %28 : i32 -> tensor<5xi32>
+      %30 = arith.addi %29, %27 : tensor<5xi32>
+      %31 = tt.expand_dims %30 {axis = 0 : i32} : tensor<5xi32> -> tensor<1x5xi32>
+      %32 = tt.broadcast %31 : tensor<1x5xi32> -> tensor<3x5xi32>
+      %33 = arith.addi %26, %32 : tensor<3x5xi32>
+      %34 = tt.splat %arg1 : !tt.ptr<i8> -> tensor<3x5x!tt.ptr<i8>>
+      %35 = tt.addptr %34, %33 : tensor<3x5x!tt.ptr<i8>>, tensor<3x5xi32>
+      %36 = tt.load %35 : tensor<3x5x!tt.ptr<i8>>
+      %reshape = tensor.reshape %36(%cst_0) : (tensor<3x5xi8>, tensor<1xi64>) -> tensor<15xi8>
+      %37 = arith.select %10, %reshape, %cst_1 : tensor<15xi1>, tensor<15xi8>
+      %38 = tt.splat %arg0 : !tt.ptr<i8> -> tensor<15x!tt.ptr<i8>>
+      %39 = tt.addptr %38, %5 : tensor<15x!tt.ptr<i8>>, tensor<15xi32>
+      tt.store %39, %37 : tensor<15x!tt.ptr<i8>>
+    }
+    %17 = arith.cmpi eq, %15, %c1_i32 : i32
+    scf.if %17 {
+      %18 = arith.divsi %2, %c5 : index
+      %19 = arith.remsi %2, %c5 : index
+      %20 = tt.make_range {end = 3 : i32, start = 0 : i32} : tensor<3xi32>
+      %21 = arith.index_cast %18 : index to i32
+      %22 = tt.splat %21 : i32 -> tensor<3xi32>
+      %23 = arith.addi %22, %20 : tensor<3xi32>
+      %24 = arith.muli %23, %cst : tensor<3xi32>
+      %25 = tt.expand_dims %24 {axis = 1 : i32} : tensor<3xi32> -> tensor<3x1xi32>
+      %26 = tt.broadcast %25 : tensor<3x1xi32> -> tensor<3x5xi32>
+      %27 = tt.make_range {end = 5 : i32, start = 0 : i32} : tensor<5xi32>
+      %28 = arith.index_cast %19 : index to i32
+      %29 = tt.splat %28 : i32 -> tensor<5xi32>
+      %30 = arith.addi %29, %27 : tensor<5xi32>
+      %31 = tt.expand_dims %30 {axis = 0 : i32} : tensor<5xi32> -> tensor<1x5xi32>
+      %32 = tt.broadcast %31 : tensor<1x5xi32> -> tensor<3x5xi32>
+      %33 = arith.addi %26, %32 : tensor<3x5xi32>
+      %34 = tt.splat %arg2 : !tt.ptr<i8> -> tensor<3x5x!tt.ptr<i8>>
+      %35 = tt.addptr %34, %33 : tensor<3x5x!tt.ptr<i8>>, tensor<3x5xi32>
+      %36 = tt.load %35 : tensor<3x5x!tt.ptr<i8>>
+      %reshape = tensor.reshape %36(%cst_0) : (tensor<3x5xi8>, tensor<1xi64>) -> tensor<15xi8>
+      %37 = arith.select %10, %reshape, %cst_1 : tensor<15xi1>, tensor<15xi8>
+      %38 = tt.splat %arg0 : !tt.ptr<i8> -> tensor<15x!tt.ptr<i8>>
+      %39 = tt.addptr %38, %5 : tensor<15x!tt.ptr<i8>>, tensor<15xi32>
+      tt.store %39, %37 : tensor<15x!tt.ptr<i8>>
+    }
+    tt.return
+  }
+}
+
